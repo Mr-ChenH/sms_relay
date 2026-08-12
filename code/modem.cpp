@@ -1,5 +1,6 @@
 #include "modem.h"
-#include "web_handlers.h"
+#include "logger.h"
+#include "terminal_client.h"
 
 // 发送AT命令并获取响应
 String sendATCommand(const char* cmd, unsigned long timeout) {
@@ -9,6 +10,7 @@ String sendATCommand(const char* cmd, unsigned long timeout) {
   unsigned long start = millis();
   String resp = "";
   while (millis() - start < timeout) {
+    terminalClientService();
     if (Serial1.available()) {
       char c = Serial1.read();
       resp += c;
@@ -17,44 +19,54 @@ String sendATCommand(const char* cmd, unsigned long timeout) {
         unsigned long t = millis();
         while (millis() - t < 50) {
           if (Serial1.available()) resp += (char)Serial1.read();
-          server.handleClient();
+
         }
         return resp;
       }
     }
-    server.handleClient();
+
   }
   return resp;
 }
 
 // 新增"模组断电重启"函数
-void modemPowerCycle() {
+bool modemPowerCycle() {
   pinMode(MODEM_EN_PIN, OUTPUT);
 
   logCaptureLn(String("EN 拉低：关闭模组"));
   digitalWrite(MODEM_EN_PIN, LOW);
-  delay(1200);  // 关机时间给够
+  delay(1200);
 
   logCaptureLn(String("EN 拉高：开启模组"));
   digitalWrite(MODEM_EN_PIN, HIGH);
-  delay(6000);  // 等模组完全启动再发AT（关键）
+  delay(6000);
+  return true;
 }
 
-// 重启模组（EN引脚断电重启 + 重新初始化）
-void resetModule() {
+// 重启模组（EN引脚断电重启 + 有界初始化）
+bool resetModule() {
   logCaptureLn(String("正在硬重启模组（EN 断电重启）..."));
   modemPowerCycle();
-  modemInit();
+  return modemInit();
 }
 
-// 模组 AT 初始化流程（setup 中调用，resetModule 后也调用）
-void modemInit() {
-  // 清掉上电噪声/残留
+// 模组初始化必须有界，失败后由主循环继续维持 MQTT，不能永久阻塞终端。
+bool modemInit() {
   while (Serial1.available()) Serial1.read();
 
-  while (!sendATandWaitOK("AT", 1000)) {
-    logCaptureLn(String("AT未响应，重试..."));
-    blink_short();
+  bool atReady = false;
+  for (int attempt = 0; attempt < 20; attempt++) {
+    if (sendATandWaitOK("AT", 1000)) {
+      atReady = true;
+      break;
+    }
+    logCaptureLn(String("AT未响应，重试 ") + String(attempt + 1) + "/20");
+    blink_short(200);
+  }
+  if (!atReady) {
+    logCaptureLn(String("模组AT初始化超时"));
+    modemReady = false;
+    return false;
   }
   logCaptureLn(String("模组AT响应正常"));
 
@@ -88,38 +100,57 @@ void modemInit() {
     if(model == "ML307Y") need_set_CGACT = false;
   }
 
-  if(need_set_CGACT) {
-    while (!sendATandWaitOK("AT+CGACT=0,1", 5000)) {
-      logCaptureLn(String("设置CGACT失败，重试..."));
-      blink_short();
+  if (need_set_CGACT) {
+    bool cgactConfigured = false;
+    for (int attempt = 0; attempt < 3; attempt++) {
+      if (sendATandWaitOK("AT+CGACT=0,1", 5000)) {
+        cgactConfigured = true;
+        break;
+      }
+      logCaptureLn(String("设置CGACT失败，重试 ") + String(attempt + 1) + "/3");
+      blink_short(200);
     }
-    logCaptureLn(String("已禁用数据连接(AT+CGACT=0,1)，防止流量消耗"));
+    if (cgactConfigured) {
+      logCaptureLn(String("已禁用数据连接(AT+CGACT=0,1)，防止流量消耗"));
+    } else {
+      logCaptureLn(String("设置CGACT失败，继续初始化"));
+    }
   } else {
-    logCaptureLn(String("该型号无法配置(AT+CGACT=0,1)，跳过该命令，会不会消耗流量？自求多福"));
+    logCaptureLn(String("该型号无法配置(AT+CGACT=0,1)，跳过该命令"));
   }
-  while (!sendATandWaitOK("AT+CNMI=2,2,0,0,0", 1000)) {
-    logCaptureLn(String("设置CNMI失败，重试..."));
-    blink_short();
+
+  bool smsConfigured = false;
+  for (int attempt = 0; attempt < 3; attempt++) {
+    if (sendATandWaitOK("AT+CNMI=2,2,0,0,0", 1000) &&
+        sendATandWaitOK("AT+CMGF=0", 1000)) {
+      smsConfigured = true;
+      break;
+    }
+    logCaptureLn(String("短信参数设置失败，重试 ") + String(attempt + 1) + "/3");
+    blink_short(200);
   }
-  logCaptureLn(String("CNMI参数设置完成"));
-  while (!sendATandWaitOK("AT+CMGF=0", 1000)) {
-    logCaptureLn(String("设置PDU模式失败，重试..."));
-    blink_short();
+  if (!smsConfigured) {
+    logCaptureLn(String("短信参数初始化失败"));
+    modemReady = false;
+    return false;
   }
-  logCaptureLn(String("PDU模式设置完成"));
+  logCaptureLn(String("短信参数设置完成"));
+
   int ceregRetry = 0;
-  while (!waitCEREG() && ceregRetry < 30) {
-    logCaptureLn(String("等待网络注册..."));
+  while (!waitCEREG() && ceregRetry < 15) {
     ceregRetry++;
-    blink_short();
+    logCaptureLn(String("等待网络注册 ") + String(ceregRetry) + "/15");
+    blink_short(200);
   }
-  if (ceregRetry < 30) {
+  if (ceregRetry < 15) {
     logCaptureLn(String("网络已注册"));
     modemReady = true;
-  } else {
-    logCaptureLn(String("⚠️ 网络注册超时（无SIM卡或信号差），模组功能不可用"));
-    modemReady = false;
+    return true;
   }
+
+  logCaptureLn(String("网络注册超时，终端控制链路继续运行"));
+  modemReady = false;
+  return false;
 }
 
 void blink_short(unsigned long gap_time) {
@@ -135,13 +166,14 @@ bool sendATandWaitOK(const char* cmd, unsigned long timeout) {
   unsigned long start = millis();
   String resp = "";
   while (millis() - start < timeout) {
+    terminalClientService();
     if (Serial1.available()) {
       char c = Serial1.read();
       resp += c;
       if (resp.indexOf("OK") >= 0) return true;
       if (resp.indexOf("ERROR") >= 0) return false;
     }
-    server.handleClient();
+
   }
   return false;
 }
@@ -153,6 +185,7 @@ bool waitCEREG() {
   unsigned long start = millis();
   String resp = "";
   while (millis() - start < 2000) {
+    terminalClientService();
     if (Serial1.available()) {
       char c = Serial1.read();
       resp += c;
@@ -162,7 +195,7 @@ bool waitCEREG() {
             resp.indexOf(",3") >= 0 || resp.indexOf(",4") >= 0) return false;
       }
     }
-    server.handleClient();
+
   }
   return false;
 }
@@ -205,7 +238,7 @@ bool sendSMS(const char* phoneNumber, const char* message) {
         break;
       }
     }
-    server.handleClient();
+
   }
   
   if (!gotPrompt) {
@@ -234,7 +267,7 @@ bool sendSMS(const char* phoneNumber, const char* message) {
         return false;
       }
     }
-    server.handleClient();
+
   }
   logCaptureLn(String("短信发送超时"));
   return false;

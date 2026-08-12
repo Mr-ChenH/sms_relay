@@ -1,1 +1,7 @@
 code/wifi_config.h
+.pi*
+NUL
+*.exe
+docs/
+*.exe*
+.gitkeep

@@ -5,8 +5,6 @@
 
 void saveConfig();
 void loadConfig();
-bool isPushChannelValid(const PushChannel& ch);
 bool isConfigValid();
-String getDeviceUrl();
 
 #endif

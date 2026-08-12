@@ -1,0 +1,98 @@
+min_version = "2024.11.0"
+
+[tools]
+go = "1.25.0"
+node = "20"
+
+[env]
+_.path = ["./web/node_modules/.bin"]
+SMS_HUB_API_ADDR = ":8080"
+SMS_HUB_DB_PATH = "../data/smshub.db"
+APPRISE_BASE_URL = "http://localhost:8000"
+
+[tasks.install]
+description = "Install API and web dependencies"
+depends = ["api:install", "web:install"]
+
+[tasks."api:install"]
+description = "Download and verify Go modules"
+dir = "api"
+run = ["go mod download", "go mod verify"]
+
+[tasks."web:install"]
+description = "Install web dependencies from the lockfile"
+dir = "web"
+sources = ["package.json", "package-lock.json"]
+outputs = ["node_modules/.package-lock.json"]
+run = "npm ci"
+
+[tasks.dev]
+description = "Run the API and web development servers"
+depends = ["dev:api", "dev:web"]
+
+[tasks."dev:api"]
+description = "Run the Go API and embedded MQTT broker"
+dir = "api"
+run = "go run ./cmd/smshub"
+
+[tasks."dev:web"]
+description = "Run the Vite development server"
+dir = "web"
+depends = ["web:install"]
+run = "npm run dev"
+
+[tasks.test]
+description = "Run all automated tests"
+depends = ["test:api", "test:web"]
+
+[tasks."test:api"]
+description = "Run Go tests"
+dir = "api"
+run = "go test ./..."
+
+[tasks."test:web"]
+description = "Type-check and build the web application"
+dir = "web"
+depends = ["web:install"]
+run = "npm run build"
+
+[tasks.build]
+description = "Build the API binary and web application"
+depends = ["build:api", "build:web"]
+
+[tasks."build:api"]
+description = "Build the SMS Hub API binary"
+dir = "api"
+run = "go build -o ../smshub ./cmd/smshub"
+
+[tasks."build:web"]
+description = "Build the web application"
+dir = "web"
+depends = ["web:install"]
+run = "npm run build"
+
+[tasks.fmt]
+description = "Format all Go source files"
+dir = "api"
+run = "gofmt -w ."
+
+[tasks.check]
+description = "Run formatting checks, vet, tests, and web build"
+depends = ["check:api", "test:web"]
+
+[tasks."check:api"]
+description = "Check formatting, run go vet, and run Go tests"
+dir = "api"
+run = [
+  "test -z \"$(gofmt -l .)\" || (echo 'Go files need formatting:' && gofmt -l . && exit 1)",
+  "go vet ./...",
+  "go test ./...",
+]
+
+[tasks.up]
+description = "Start the complete stack with Docker Compose"
+run = "docker compose up"
+
+[tasks.down]
+description = "Stop the Docker Compose stack"
+run = "docker compose down"

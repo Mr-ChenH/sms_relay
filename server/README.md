@@ -1,0 +1,142 @@
+# SMS Hub Server
+
+Go API + Vue 3 management console for the centralized SMS/eSIM hub.
+
+## Structure
+
+```text
+server/
+  api/       Go HTTP API service
+  web/       Vue 3 + Vite management console
+  apprise/   self-hosted Apprise API config/plugin/attach volumes
+  data/      SQLite database files
+```
+
+## Run With Docker Compose
+
+```bash
+cd server
+docker compose up
+```
+
+Services:
+
+- SMS Hub API: `http://localhost:8080`
+- SMS Hub Web: `http://localhost:5173`
+- Apprise API: `http://localhost:8000`
+
+The Go API calls Apprise through `APPRISE_BASE_URL=http://apprise:8000` in compose. API data is persisted to `server/data/smshub.db` via SQLite.
+
+## Run API Locally
+
+```bash
+cd server/api
+go run ./cmd/smshub
+```
+
+Default API address: `http://localhost:8080`.
+
+SQLite data is persisted by default to:
+
+- `server/data/smshub.db` when running from `server/`
+- `server/data/smshub.db` when running `go run` from `server/api`
+
+Override with:
+
+```bash
+SMS_HUB_DB_PATH=/path/to/smshub.db go run ./cmd/smshub
+```
+
+Apprise API defaults to `http://localhost:8000`. Override with:
+
+```bash
+APPRISE_BASE_URL=http://localhost:8000 go run ./cmd/smshub
+```
+
+Health check:
+
+```bash
+curl http://localhost:8080/api/health
+```
+
+## Run Web
+
+```bash
+cd server/web
+npm install
+npm run dev
+```
+
+Default Web address: `http://localhost:5173`.
+
+The Vite dev server proxies `/api` to `http://localhost:8080`.
+
+## Current Scope
+
+This is the first runnable skeleton based on the project-factory design:
+
+- SQLite-backed persistence for devices, SMS, commands, Apprise services/targets, routing rules, eSIM profiles/tasks/subscriptions, logs, and audit state.
+- No startup demo/debug data is inserted; a new database starts empty and is populated by real terminal/API actions.
+- Vue 3 console pages for overview, devices, historical SMS, sending SMS, distribution, eSIM, diagnostics, logs, and audit.
+- `POST /api/admin/outbound-sms` creates a real pending device command in the persisted command queue.
+- Terminal protocol endpoints are available for registration, heartbeat, SMS upload, log upload, command polling, and command result upload.
+- SMS upload dispatches notifications through enabled routing rules. A rule can filter by sender substring, any body keyword, device, and SMS tag, then select one or more Apprise targets. Conditions across fields are ANDed; keywords within one rule are ORed. Multiple matching rules union and deduplicate their targets. When no structured rule is enabled, notifications continue to fan out to all enabled targets for backward compatibility. Apprise failures do not block SMS storage.
+
+## API Surface
+
+Admin endpoints:
+
+- `GET /api/admin/dashboard`
+- `GET /api/admin/devices`
+- `GET /api/admin/sms?page=1&pageSize=50&q=...`
+- `POST /api/admin/outbound-sms`
+- `GET /api/admin/commands`
+- `POST /api/admin/commands`
+- `GET /api/admin/apprise-services`
+- `POST /api/admin/apprise-services`
+- `PUT /api/admin/apprise-services/{id}`
+- `DELETE /api/admin/apprise-services/{id}`
+- `POST /api/admin/apprise-services/test`
+- `GET /api/admin/apprise-targets`
+- `POST /api/admin/apprise-targets`
+- `PUT /api/admin/apprise-targets/{id}`
+- `DELETE /api/admin/apprise-targets/{id}`
+- `POST /api/admin/notify-test`
+- `GET /api/admin/routing-rules`
+- `POST /api/admin/routing-rules`
+- `PUT /api/admin/routing-rules/{id}`
+- `DELETE /api/admin/routing-rules/{id}`
+- `GET /api/admin/esim/profiles`
+- `GET /api/admin/esim/tasks`
+- `POST /api/admin/esim/tasks`
+- `GET /api/admin/esim/subscriptions`
+- `POST /api/admin/esim/subscriptions`
+- `PUT /api/admin/esim/subscriptions/{id}`
+- `GET /api/admin/logs`
+- `GET /api/admin/audit`
+
+Terminal MQTT topics:
+
+SMS Hub starts an embedded MQTT broker by default, so a normal deployment only needs the `smshub` API process. The same process listens on the HTTP API address, default `:8080`, and MQTT address, default `:1883`.
+
+Terminal BLE provisioning only needs the server host/IP. The firmware derives `http://SERVER_HOST:8080` and `mqtt://SERVER_HOST:1883` automatically:
+
+```text
+SSID|PASSWORD|SERVER_HOST
+SERVER|SERVER_HOST
+```
+
+Set `SMS_HUB_EMBEDDED_MQTT=false` and `SMS_HUB_MQTT_BROKER=tcp://host:1883` only when using an external broker.
+
+- `sms-hub/devices/{deviceId}/register`
+- `sms-hub/devices/{deviceId}/heartbeat`
+- `sms-hub/devices/{deviceId}/sms`
+- `sms-hub/devices/{deviceId}/logs`
+- `sms-hub/devices/{deviceId}/esim/profiles`
+- `sms-hub/devices/{deviceId}/commands/{commandId}/result`
+- `sms-hub/devices/{deviceId}/status`
+- `sms-hub/devices/{deviceId}/commands` for server-to-terminal command delivery
+
+Terminal HTTP endpoints have been removed. Terminals must connect through MQTT; the HTTP API is only for the SMS Hub web/admin surface.
+
+Next phases should add terminal/admin authentication, migrate from snapshot persistence to normalized relational tables if query/reporting needs grow, implement async delivery and eSIM maintenance workers, and expand ESP32 terminal command execution coverage.

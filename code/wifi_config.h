@@ -1,3 +1,9 @@
-//WIFI - 仍使用宏定义，因为需要先联网才能配置其他参数
-#define WIFI_SSID "Tenda_825C30"
-#define WIFI_PASS "888888888"
+#ifndef WIFI_CONFIG_H
+#define WIFI_CONFIG_H
+
+// BLE provisioning formats:
+//   SERVER|SMS_HUB_HOST
+//   MQTT|MQTT_BROKER|MQTT_USER|MQTT_PASS
+//   SSID|PASSWORD|MQTT_BROKER|MQTT_USER|MQTT_PASS
+
+#endif

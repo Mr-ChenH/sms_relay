@@ -3,13 +3,8 @@
 
 #include <Arduino.h>
 #include <WiFi.h>
-#include <WiFiClientSecure.h>
-#include <WebServer.h>
 #include <Preferences.h>
 #include <pdulib.h>
-#define ENABLE_SMTP
-//#define ENABLE_DEBUG
-#include <ReadyMail.h>
 #include "config_types.h"
 
 // 串口映射
@@ -29,11 +24,7 @@
 extern Config config;
 extern Preferences preferences;
 extern PDU pdu;
-extern WiFiClientSecure ssl_client;
-extern SMTPClient smtp;
-extern WebServer server;
 extern bool configValid;
-extern bool timeSynced;
 extern bool modemReady;
 extern unsigned long lastPrintTime;
 extern ConcatSms concatBuffer[MAX_CONCAT_MESSAGES];

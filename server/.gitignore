@@ -1,0 +1,7 @@
+api*.log
+web.log
+data/*.db
+data/*.db-*
+web/node_modules/
+web/dist/
+web/tsconfig.tsbuildinfo

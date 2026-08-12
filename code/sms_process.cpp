@@ -1,9 +1,6 @@
 #include "sms_process.h"
-#include "web_handlers.h"
-#include "modem.h"
-#include "web_handlers.h"
-#include "push.h"
-#include "web_handlers.h"
+#include "logger.h"
+#include "terminal_client.h"
 
 // 初始化长短信缓存
 void initConcatBuffer() {
@@ -19,6 +16,8 @@ void initConcatBuffer() {
 
 // 查找或创建长短信缓存槽位
 int findOrCreateConcatSlot(int refNumber, const char* sender, int totalParts) {
+  if (totalParts < 1 || totalParts > MAX_CONCAT_PARTS) return -1;
+
   // 先查找是否已存在
   for (int i = 0; i < MAX_CONCAT_MESSAGES; i++) {
     if (concatBuffer[i].inUse && 
@@ -72,8 +71,12 @@ int findOrCreateConcatSlot(int refNumber, const char* sender, int totalParts) {
 
 // 合并长短信各分段
 String assembleConcatSms(int slot) {
+  if (slot < 0 || slot >= MAX_CONCAT_MESSAGES) return "";
+  int totalParts = concatBuffer[slot].totalParts;
+  if (totalParts < 0) totalParts = 0;
+  if (totalParts > MAX_CONCAT_PARTS) totalParts = MAX_CONCAT_PARTS;
   String result = "";
-  for (int i = 0; i < concatBuffer[slot].totalParts; i++) {
+  for (int i = 0; i < totalParts; i++) {
     if (concatBuffer[slot].parts[i].valid) {
       result += concatBuffer[slot].parts[i].text;
     } else {
@@ -85,6 +88,7 @@ String assembleConcatSms(int slot) {
 
 // 清空长短信槽位
 void clearConcatSlot(int slot) {
+  if (slot < 0 || slot >= MAX_CONCAT_MESSAGES) return;
   concatBuffer[slot].inUse = false;
   concatBuffer[slot].receivedParts = 0;
   concatBuffer[slot].sender = "";
@@ -156,145 +160,14 @@ bool isHexString(const String& str) {
   return true;
 }
 
-// 检查发送者是否在号码黑名单中
-bool isInNumberBlackList(const char* sender) {
-  if (config.numberBlackList.length() == 0) return false;
-
-  String originalSender = String(sender);
-  bool has86 = originalSender.startsWith("+86");
-  String strippedSender = has86 ? originalSender.substring(3) : "";
-
-  int listLen = (int)config.numberBlackList.length();
-
-  int start = 0;
-  while (start <= listLen) {
-    int end = config.numberBlackList.indexOf('\n', start);
-    if (end == -1) end = listLen;
-
-    String line = config.numberBlackList.substring(start, end);
-    line.trim();
-
-    if (line.length() > 0 && (line.equals(originalSender) || (has86 && line.equals(strippedSender)))) {
-      return true;
-    }
-
-    start = end + 1;
-  }
-
-  return false;
-}
-
-// 检查发送者是否为管理员
-bool isAdmin(const char* sender) {
-  if (config.adminPhone.length() == 0) return false;
-  
-  // 去除可能的国际区号前缀进行比较
-  String senderStr = String(sender);
-  String adminStr = config.adminPhone;
-  
-  // 去除+86前缀
-  if (senderStr.startsWith("+86")) {
-    senderStr = senderStr.substring(3);
-  }
-  if (adminStr.startsWith("+86")) {
-    adminStr = adminStr.substring(3);
-  }
-  
-  return senderStr.equals(adminStr);
-}
-
-// 处理管理员命令
-void processAdminCommand(const char* sender, const char* text) {
-  String cmd = String(text);
-  cmd.trim();
-  
-  logCaptureLn(String("处理管理员命令: " + cmd));
-  
-  // 处理 SMS:号码:内容 命令
-  if (cmd.startsWith("SMS:")) {
-    int firstColon = cmd.indexOf(':');
-    int secondColon = cmd.indexOf(':', firstColon + 1);
-    
-    if (secondColon > firstColon + 1) {
-      String targetPhone = cmd.substring(firstColon + 1, secondColon);
-      String smsContent = cmd.substring(secondColon + 1);
-      
-      targetPhone.trim();
-      smsContent.trim();
-      
-      logCaptureLn(String("目标号码: " + targetPhone));
-      logCaptureLn(String("短信内容: " + smsContent));
-      
-      bool success = sendSMS(targetPhone.c_str(), smsContent.c_str());
-      
-      // 发送邮件通知结果
-      String subject = success ? "短信发送成功" : "短信发送失败";
-      String body = "管理员命令执行结果:\n";
-      body += "命令: " + cmd + "\n";
-      body += "目标号码: " + targetPhone + "\n";
-      body += "短信内容: " + smsContent + "\n";
-      body += "执行结果: " + String(success ? "成功" : "失败");
-      
-      sendEmailNotification(subject.c_str(), body.c_str());
-    } else {
-      logCaptureLn(String("SMS命令格式错误"));
-      sendEmailNotification("命令执行失败", "SMS命令格式错误，正确格式: SMS:号码:内容");
-    }
-  }
-  // 处理 RESET 命令
-  else if (cmd.equals("RESET")) {
-    logCaptureLn(String("执行RESET命令"));
-    
-    // 先发送邮件通知（因为重启后就发不了了）
-    sendEmailNotification("重启命令已执行", "收到RESET命令，即将重启模组和ESP32...");
-    
-    // 重启模组
-    resetModule();
-    
-    // 重启ESP32
-    logCaptureLn(String("正在重启ESP32..."));
-    delay(1000);
-    ESP.restart();
-  }
-  else {
-    logCaptureLn(String("未知命令: " + cmd));
-  }
-}
-
-// 处理最终的短信内容（管理员命令检查和转发）
+// 处理最终短信内容。采集端不做过滤或远程命令解释，统一交给中心服务审计和路由。
 void processSmsContent(const char* sender, const char* text, const char* timestamp) {
   logCaptureLn(String("=== 处理短信内容 ==="));
-  logCaptureLn(String("发送者: " + String(sender)));
-  logCaptureLn(String("时间戳: " + String(timestamp)));
-  logCaptureLn(String("内容: " + String(text)));
+  logCaptureLn(String("发送者: ") + String(sender));
+  logCaptureLn(String("时间戳: ") + String(timestamp));
+  logCaptureLn(String("内容: ") + String(text));
   logCaptureLn(String("===================="));
-
-  // 检查是否在号码黑名单中
-  if (isInNumberBlackList(sender)) {
-    logCaptureLn(String("发送者在号码黑名单中，忽略该短信"));
-    return;
-  }
-
-  // 检查是否为管理员命令
-  if (isAdmin(sender)) {
-    logCaptureLn(String("收到管理员短信，检查命令..."));
-    String smsText = String(text);
-    smsText.trim();
-    
-    // 检查是否为命令格式
-    if (smsText.startsWith("SMS:") || smsText.equals("RESET")) {
-      processAdminCommand(sender, text);
-      // 命令已处理，不再发送普通通知邮件
-      return;
-    }
-  }
-
-  // 发送通知http（推送到所有启用的通道）
-  sendSMSToServer(sender, text, timestamp);
-  // 发送通知邮件
-  String subject = ""; subject+="短信";subject+=sender;subject+=",";subject+=text;
-  String body = ""; body+="来自：";body+=sender;body+="，时间：";body+=timestamp;body+="，内容：";body+=text;
-  sendEmailNotification(subject.c_str(), body.c_str());
+  terminalReportSMS(sender, text, timestamp);
 }
 
 static void handlePduLine(const String& line) {
@@ -321,9 +194,18 @@ static void handlePduLine(const String& line) {
   logCaptureLn(String("==============="));
 
   if (totalParts > 1 && partNumber > 0) {
-    logCaptureF("📧 收到长短信分段 %d/%d\n", partNumber, totalParts);
+    if (totalParts > MAX_CONCAT_PARTS || partNumber > totalParts) {
+      logCaptureF("长短信分段超出容量，按单段上报: %d/%d\n", partNumber, totalParts);
+      processSmsContent(pdu.getSender(), pdu.getText(), pdu.getTimeStamp());
+      return;
+    }
+    logCaptureF("收到长短信分段 %d/%d\n", partNumber, totalParts);
 
     int slot = findOrCreateConcatSlot(refNumber, pdu.getSender(), totalParts);
+    if (slot < 0) {
+      processSmsContent(pdu.getSender(), pdu.getText(), pdu.getTimeStamp());
+      return;
+    }
     int partIndex = partNumber - 1;
     if (partIndex >= 0 && partIndex < MAX_CONCAT_PARTS) {
       if (!concatBuffer[slot].parts[partIndex].valid) {

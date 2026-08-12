@@ -16,11 +16,11 @@
 ## 功能
 
 - 支持使用通用AT指令与模块进行通信
-- 开启后支持通过WEB界面配置短信转发参数、查询当前状态
+- 通过 BLE 配置 WiFi 与中心服务地址，终端不再提供本机 Web 管理页面
 - **支持多达5个推送通道同时启用**，每个通道可独立配置
 - 支持将收到的短信转发到指定的邮箱
-- 支持通过WEB界面主动发送短信，以便消耗余额
-- 支持通过WEB界面进行Ping测试，以极低的成本消耗余额
+- 支持通过 SMS Hub 管理台远程发送短信，以便消耗余额
+- 支持通过 SMS Hub 管理台远程执行 Ping 测试，以极低的成本消耗余额
 - 支持长短信自动合并（30秒超时）
 - 支持管理员短信远程发送短信和重启设备
 - 支持eSIM卡管理功能
@@ -108,10 +108,20 @@ ESP32C3 与 ML307A 通过串口（UART）连接，接线如下：
 
 ## 软件组成
 
-- ESP32C3运行自己的`Arduino`固件，负责连接WiFi和接收ML307R-DC发送过来的短信数据，然后转发到指定HTTP接口或邮箱
+- ESP32C3运行自己的`Arduino`固件，负责连接WiFi和接收ML307R-DC发送过来的短信数据，然后通过 MQTT 上报到 SMS Hub；现场配置通过 BLE 完成，只需要写入服务器 IP
+- SMS Hub 后端默认内置 MQTT Broker，单独启动后端进程即可同时提供 Web/API `8080` 和 MQTT `1883`
 - ML307A运行默认的AT固件，不用动
 
 
+
+BLE 写入示例：
+
+```text
+SSID|PASSWORD|192.168.2.11
+SERVER|192.168.2.11
+```
+
+终端会自动使用 `http://192.168.2.11:8080` 作为管理 API 地址、`mqtt://192.168.2.11:1883` 作为 MQTT 地址。
 
 需要在`Arduino IDE`中单独安装这些库：
 
@@ -123,22 +133,15 @@ https://jihulab.com/esp-mirror/espressif/arduino-esp32/-/raw/gh-pages/package_es
 lib：
 - **ReadyMail** by Mobizt
 - **pdulib** by David Henry
+- **PubSubClient** by Nick O'Leary（用于连接 SMS Hub MQTT Broker）
 
 需要在`Arduino IDE`中安装ESP32开发板支持，参考[官方文档](https://docs.espressif.com/projects/arduino-esp32/en/latest/installing.html)，版型选`MakerGO ESP32 C3 SuperMini`。
 
 ## 保号
 需要定时发送短信或消耗一点流量进行保号也很简单。（Linux为例）
-1. 获取相关http请求
-![保号](assets/baohao.png)
-这是查询网络状态的抓包，发短信，ping消耗流量也是类似。获取curl。`Authorization: Basic XXXXXXX` 是验证用户名密码的。（因此暴露到公网是危险的）
-```
+保号操作现在建议在 SMS Hub 管理台中对终端下发发送短信、Ping 或诊断命令；终端不再暴露本机 Web 管理接口。
 
-curl 'http://192.168.38.201/query?type=network' \
-  -H 'Accept: */*' \
-  -H 'Authorization: Basic XXXXXXX' \
-  --insecure
-
-```
+历史版本可通过抓包调用终端本机 HTTP 接口，新版本已移除该入口。
 2. 编写bash脚本
 
 简单的流程就是，切卡->一直查询网络状态直到成功->发短信
