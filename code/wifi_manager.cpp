@@ -3,6 +3,7 @@
 #include "logger.h"
 #include "modem.h"
 #include "config.h"
+#include "terminal_client.h"
 #include <BLEDevice.h>
 #include <BLEServer.h>
 #include <BLEUtils.h>
@@ -22,6 +23,7 @@ static const char* BLE_STATUS_CHAR_UUID = "7d6d0003-5f36-4f64-8f2b-ec2a7b3d0101"
 
 static bool provisioningStarted = false;
 static bool pendingCredentials = false;
+static bool pendingTerminalConfig = false;
 static String pendingSSID;
 static String pendingPassword;
 static BLECharacteristic* statusCharacteristic = nullptr;
@@ -88,6 +90,7 @@ static void saveHubConfig(const String& mqttBroker, const String& mqttUser, cons
   config.smsHubMqttPass = mqttPass;
   saveConfig();
   configValid = isConfigValid();
+  pendingTerminalConfig = true;
 }
 
 static void saveHubMqttConfig(const String& mqttBroker, const String& mqttUser, const String& mqttPass) {
@@ -272,6 +275,33 @@ static void beginCustomBLEProvisioning() {
   logCaptureLn(String("BLE 广播已启动"));
 }
 
+static void applyPendingConfiguration() {
+  if (pendingTerminalConfig) {
+    pendingTerminalConfig = false;
+    terminalClientConfigChanged();
+  }
+
+  if (!pendingCredentials) return;
+  pendingCredentials = false;
+  String previousSSID;
+  String previousPassword;
+  bool hadPreviousCredentials = loadSavedWiFi(previousSSID, previousPassword);
+  WiFi.setAutoReconnect(false);
+  WiFi.disconnect(true, false);
+  delay(100);
+  if (connectWiFiWithCredentials(pendingSSID, pendingPassword, 20000)) {
+    saveWiFiCredentials(pendingSSID, pendingPassword);
+    return;
+  }
+
+  if (hadPreviousCredentials && previousSSID != pendingSSID) {
+    logCaptureLn(String("恢复此前 WiFi: ") + previousSSID);
+    setBLEStatus(String("restoring:") + previousSSID);
+    connectWiFiWithCredentials(previousSSID, previousPassword, 20000);
+  }
+  WiFi.setAutoReconnect(true);
+}
+
 bool reconnectConfiguredWiFi(unsigned long timeoutMs) {
   String ssid;
   String password;
@@ -297,14 +327,14 @@ bool connectWiFiOrStartProvisioning() {
 
   beginCustomBLEProvisioning();
   while (WiFi.status() != WL_CONNECTED) {
-    if (pendingCredentials) {
-      pendingCredentials = false;
-      saveWiFiCredentials(pendingSSID, pendingPassword);
-      connectWiFiWithCredentials(pendingSSID, pendingPassword, 20000);
-    }
+    applyPendingConfiguration();
     blink_short(500);
   }
   return true;
+}
+
+void wifiManagerLoop() {
+  applyPendingConfiguration();
 }
 
 void resetWiFiProvisioning() {

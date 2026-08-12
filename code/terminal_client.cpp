@@ -44,6 +44,9 @@ static String lastCompletedCommandId;
 static String pendingResultCommandId;
 static String pendingResultBody;
 static bool pendingResultOK = false;
+static String activeMqttBroker;
+static String activeMqttUser;
+static String activeMqttPass;
 static unsigned long lastMqttReconnectAt = 0;
 static unsigned long lastMqttErrorLogAt = 0;
 static int lastMqttState = 0;
@@ -234,6 +237,20 @@ static void terminalHeartbeat(bool refreshIdentity = true) {
   doc["freeHeapKb"] = ESP.getFreeHeap() / 1024;
   doc["uptime"] = String(millis() / 1000) + "s";
   if (publishJSON("/heartbeat", doc, false)) lastHeartbeatAt = millis();
+}
+
+void terminalClientIdentityReady() {
+  cachedICCID = "";
+  cachedEID = "";
+  cachedOperator = "";
+  cachedPhoneNumber = "";
+  lastIdentityRefreshAt = 0;
+  identitySettleUntil = millis() + IDENTITY_SETTLE_WINDOW_MS;
+  refreshIdentityCache(true);
+  terminalSyncEsimProfiles();
+  terminalHeartbeat(false);
+  terminalReportLog("info", String("initial identity reported: iccid=") + cachedICCID +
+                            ", operator=" + cachedOperator + ", phone=" + cachedPhoneNumber);
 }
 
 static void refreshIdentityAfterProfileChange() {
@@ -628,7 +645,10 @@ static void executePendingCommand() {
 
 static bool ensureMqttConnected() {
   if (!mqttEnabled() || WiFi.status() != WL_CONNECTED) return false;
-  if (mqttClient.connected()) return true;
+  if (mqttClient.connected() && activeMqttBroker == mqttBrokerURL() &&
+      activeMqttUser == config.smsHubMqttUser && activeMqttPass == config.smsHubMqttPass) return true;
+  if (mqttClient.connected()) mqttClient.disconnect();
+  mqttWifiClient.stop();
   unsigned long now = millis();
   if (lastMqttReconnectAt > 0 && now - lastMqttReconnectAt < MQTT_RECONNECT_INTERVAL_MS) return false;
   lastMqttReconnectAt = now;
@@ -661,6 +681,10 @@ static bool ensureMqttConnected() {
   }
   lastMqttState = 0;
   lastMqttErrorLogAt = 0;
+  activeMqttBroker = mqttBrokerURL();
+  activeMqttUser = config.smsHubMqttUser;
+  activeMqttPass = config.smsHubMqttPass;
+  registered = false;
   logCaptureLn(String("MQTT 已连接: ") + host + ":" + String(port));
   if (apduSessionConnected || apduLogicalChannel > 0) {
     if (apduLogicalChannel > 0) esimSendAT((String("AT+CCHC=") + apduLogicalChannel).c_str(), 5000);
@@ -675,6 +699,24 @@ static bool ensureMqttConnected() {
   terminalRegister();
   terminalHeartbeat();
   return true;
+}
+
+void terminalClientConfigChanged() {
+  if (mqttClient.connected()) mqttClient.disconnect();
+  mqttWifiClient.stop();
+  activeMqttBroker = "";
+  activeMqttUser = "";
+  activeMqttPass = "";
+  mqttConfigured = terminalClientEnabled();
+  registered = false;
+  lastMqttReconnectAt = 0;
+  lastMqttErrorLogAt = 0;
+  lastMqttState = 0;
+  if (mqttConfigured) {
+    logCaptureLn(String("MQTT 配置已更新: ") + mqttBrokerURL());
+  } else {
+    logCaptureLn(String("MQTT 配置已清空"));
+  }
 }
 
 void terminalClientInit() {

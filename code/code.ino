@@ -53,7 +53,9 @@ void setup() {
 
   // ---- eSIM初始化 ----
   logCaptureLn(String("初始化eSIM..."));
+  bool esimInitialized = false;
   if (modemInitialized && esimInit()) {
+    esimInitialized = true;
     logCaptureLn(String("eSIM初始化成功"));
     char eid[40];
     if (esimGetEID(eid, sizeof(eid))) {
@@ -62,6 +64,12 @@ void setup() {
     }
   } else {
     logCaptureLn(String("eSIM初始化失败或模组未就绪"));
+  }
+
+  // MQTT 会在模组初始化前上线；模组/eSIM 就绪后必须立即补发身份信息。
+  if (modemInitialized) {
+    terminalClientIdentityReady();
+    if (!esimInitialized) logCaptureLn(String("已按物理 SIM 信息完成首次身份上报"));
   }
 
 }
@@ -74,6 +82,7 @@ void loop() {
     }
   }
   checkConcatTimeout();
+  wifiManagerLoop();
   terminalClientLoop();
   handleSerialConsole();
   checkSerial1URC();

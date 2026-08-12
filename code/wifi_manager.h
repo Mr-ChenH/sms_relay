@@ -5,6 +5,7 @@
 
 bool connectWiFiOrStartProvisioning();
 bool reconnectConfiguredWiFi(unsigned long timeoutMs);
+void wifiManagerLoop();
 void resetWiFiProvisioning();
 String wifiProvisioningServiceName();
 String wifiProvisioningPOP();

@@ -6,6 +6,8 @@
 void terminalClientInit();
 void terminalClientLoop();
 void terminalClientService();
+void terminalClientConfigChanged();
+void terminalClientIdentityReady();
 void terminalReportSMS(const char* sender, const char* text, const char* timestamp);
 void terminalReportLog(const String& level, const String& message);
 void terminalSyncEsimProfiles();
