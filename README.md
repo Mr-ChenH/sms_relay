@@ -6,7 +6,7 @@
 
 > 本项目涉及硬件接线、ESP32 固件编译、AT 指令和蜂窝模组调试，不是开箱即用的消费级产品。部署前请阅读[能力边界](#能力边界与已知限制)与[安全说明](#安全说明)。
 
-![SMS Hub eSIM 管理页面](assets/esim.png)
+![SMS Hub 管理台总览](assets/Overview.png)
 
 ## 目录
 
@@ -296,6 +296,10 @@ SSID|PASSWORD|mqtt://broker.example.com:1883|USERNAME|PASSWORD
 
 ## 管理台使用流程
 
+总览页集中展示在线终端、当日短信、分发失败和 eSIM 任务，并通过订阅保活日历查看充值提醒、短信保活计划和近期提醒。
+
+![SMS Hub 管理台总览](assets/Overview.png)
+
 ### 1. 确认终端在线
 
 进入“终端”页面检查：
@@ -306,6 +310,10 @@ SSID|PASSWORD|mqtt://broker.example.com:1883|USERNAME|PASSWORD
 - 固件、硬件和资源信息
 
 如果号码显示为空，部分 SIM/eSIM 可能无法通过模组读取本机号码。此时仍可通过 ICCID、EID 和运营商识别卡片。
+
+终端页同时提供 BLE 接入参数、服务端地址检查、终端诊断入口和 eSIM/命令操作。
+
+![SMS Hub 终端管理页面](assets/Terminal.png)
 
 ### 2. 接收与查询短信
 
@@ -318,6 +326,10 @@ SSID|PASSWORD|mqtt://broker.example.com:1883|USERNAME|PASSWORD
 - 短信正文、标签和分发状态
 
 接收号码在终端入队时保存。即使之后切换 SIM/eSIM，新短信也不会改写旧记录中的接收号码。旧版本固件产生的历史记录没有号码快照时，服务端会回退显示该终端当前已知号码。
+
+历史短信页支持全文筛选、分页、当前页导出和右侧详情查看；详情中可核对完整内容、长短信状态及分发结果。
+
+![SMS Hub 历史短信页面](assets/Historical%20SMS.png)
 
 ### 3. 远程发送短信
 
