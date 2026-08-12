@@ -23,6 +23,7 @@ static const unsigned long REGISTER_INTERVAL_MS = 300000;
 static const unsigned long HEARTBEAT_INTERVAL_MS = 5000;
 static const unsigned long LOG_FLUSH_INTERVAL_MS = 15000;
 static const unsigned long MQTT_RECONNECT_INTERVAL_MS = 5000;
+static const unsigned long ESIM_PROFILE_SYNC_RETRY_MS = 5000;
 static const uint16_t MQTT_KEEPALIVE_SECONDS = 20;
 static const unsigned long ESIM_PROFILE_SYNC_INTERVAL_MS = 300000;
 static const unsigned long IDENTITY_REFRESH_INTERVAL_MS = 300000;
@@ -62,6 +63,7 @@ static unsigned long lastIdentityRefreshAt = 0;
 static unsigned long identitySettleUntil = 0;
 
 static bool registered = false;
+static bool esimProfileSyncPending = false;
 static unsigned long lastRegisterAt = 0;
 static unsigned long lastHeartbeatAt = 0;
 static unsigned long lastLogFlushAt = 0;
@@ -335,6 +337,7 @@ void terminalSyncEsimProfiles() {
   ESimProfile profiles[10];
   int count = esimGetProfiles(profiles, 10);
   if (count < 0) {
+    esimProfileSyncPending = true;
     terminalReportLog("warn", String("esim profile sync failed: ") + esimGetLastError());
     lastEsimProfileSyncAt = millis();
     return;
@@ -354,7 +357,10 @@ void terminalSyncEsimProfiles() {
     if (profiles[i].state == 1 && profiles[i].iccid[0]) cachedICCID = profiles[i].iccid;
   }
   if (publishJSON("/esim/profiles", doc, false)) {
+    esimProfileSyncPending = false;
     terminalReportLog("info", String("esim profiles synced count=") + String(count));
+  } else {
+    esimProfileSyncPending = true;
   }
   lastEsimProfileSyncAt = millis();
 }
@@ -686,6 +692,7 @@ static bool ensureMqttConnected() {
   activeMqttUser = config.smsHubMqttUser;
   activeMqttPass = config.smsHubMqttPass;
   registered = false;
+  esimProfileSyncPending = true;
   logCaptureLn(String("MQTT 已连接: ") + host + ":" + String(port));
   if (apduSessionConnected || apduLogicalChannel > 0) {
     if (apduLogicalChannel > 0) esimSendAT((String("AT+CCHC=") + apduLogicalChannel).c_str(), 5000);
@@ -748,6 +755,10 @@ void terminalClientLoop() {
   if (!terminalClientEnabled() || WiFi.status() != WL_CONNECTED) return;
   terminalClientService();
   executePendingCommand();
+  if (esimProfileSyncPending && mqttClient.connected() && !commandExecuting && !apduSessionConnected &&
+      millis() - lastEsimProfileSyncAt >= ESIM_PROFILE_SYNC_RETRY_MS) {
+    terminalSyncEsimProfiles();
+  }
   unsigned long now = millis();
   if (!registered || (lastRegisterAt > 0 && now - lastRegisterAt > REGISTER_INTERVAL_MS)) terminalRegister();
   if (now - lastEsimProfileSyncAt > ESIM_PROFILE_SYNC_INTERVAL_MS) terminalSyncEsimProfiles();
