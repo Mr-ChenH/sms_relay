@@ -13,6 +13,8 @@ services:
       SMS_HUB_PUBLIC_MQTT_BROKER: "${SMS_HUB_PUBLIC_MQTT_BROKER:-mqtt://192.168.1.10:1883}"
       LPAC_PATH: "/usr/local/bin/lpac"
       TZ: "${TZ:-Asia/Shanghai}"
+      SMS_HUB_MCP_TOKEN: "${SMS_HUB_MCP_TOKEN:-}"
+      SMS_HUB_MCP_ALLOW_WRITE: "${SMS_HUB_MCP_ALLOW_WRITE:-false}"
     ports:
       - "8080:8080"
       - "1883:1883"

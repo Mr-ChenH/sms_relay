@@ -18,6 +18,7 @@
 - [BLE 配网与终端接入](#ble-配网与终端接入)
 - [管理台使用流程](#管理台使用流程)
 - [消息分发](#消息分发)
+- [MCP 服务](#mcp-服务)
 - [eSIM 与保号](#esim-与保号)
 - [配置参考](#配置参考)
 - [本地开发与测试](#本地开发与测试)
@@ -388,6 +389,44 @@ SMS Hub 使用自托管 [Apprise API](https://github.com/caronc/apprise-api) 统
 
 不要将 Apprise URL、Token、Webhook 密钥或 SMTP 密码提交到 Git。`server/apprise/` 仅用于本地挂载配置。
 
+## MCP 服务
+
+SMS Hub 提供基于最新正式 MCP `2026-07-28` 的 Stateless Streamable HTTP 端点，同时兼容官方 Go SDK 支持的旧版 MCP 客户端。端点默认关闭，配置 Bearer Token 后在 `/mcp` 启用。
+
+```dotenv
+SMS_HUB_MCP_TOKEN=replace-with-a-long-random-token
+SMS_HUB_MCP_ALLOW_WRITE=false
+```
+
+Docker Compose 启动后，MCP 地址为：
+
+```text
+http://localhost:8080/mcp
+```
+
+客户端必须在每次请求中发送：
+
+```http
+Authorization: Bearer replace-with-a-long-random-token
+```
+
+当前工具：
+
+| 工具 | 类型 | 说明 |
+| --- | --- | --- |
+| `get_overview` | 只读 | 获取在线终端、短信流量、分发失败及 eSIM 任务概览 |
+| `list_devices` | 只读 | 查询终端状态、SIM/eSIM、运营商、信号和最后在线时间 |
+| `search_sms` | 只读 | 按正文、发送方、接收方或短信 ID 分页搜索历史短信 |
+| `list_esim_profiles` | 只读 | 查询指定终端的 Profile、ICCID、运营商及启用状态 |
+| `get_command_status` | 只读 | 按命令 ID 查询终端领取和执行结果 |
+| `send_sms` | 写入 | 创建发送短信任务；仅在 `SMS_HUB_MCP_ALLOW_WRITE=true` 时可用 |
+| `switch_esim_profile` | 写入 | 按已登记 ICCID 切换当前 Profile；要求终端在线并启用写操作 |
+| `refresh_device_status` | 写入 | 下发标准终端状态查询命令；启用写操作后可用 |
+
+MCP 可以访问短信正文、号码和终端信息，因此即使只启用查询工具也必须使用强随机 Token，并通过 HTTPS 或可信内网访问。不要将 `/mcp` 无鉴权暴露到公网。发送短信会产生真实费用，建议默认保持写操作关闭。
+
+切换 Profile 前应先调用 `list_esim_profiles` 获取该终端已登记的 ICCID。`switch_esim_profile` 只接受属于目标终端且尚未启用的 Profile，并拒绝离线终端；操作会短暂中断蜂窝连接。工具返回命令 ID 后，使用 `get_command_status` 查询终端执行结果。
+
 ## eSIM 与保号
 
 ### 已支持
@@ -442,6 +481,8 @@ Profile 下载由服务端运行的 `lpac` LPA 完成。Go API 通过 MQTT APDU 
 | `SMS_HUB_PUBLIC_MQTT_BROKER` | 空 | 管理台展示给终端的公开 MQTT 地址 |
 | `LPAC_PATH` | `lpac` | Linux 服务端 lpac 可执行文件路径；Windows 不支持下载 |
 | `TZ` | 使用系统时区；Docker Compose 默认为 `Asia/Shanghai` | 转发消息等服务端时间的本地时区，例如 `Asia/Shanghai`、`America/New_York` |
+| `SMS_HUB_MCP_TOKEN` | 空 | MCP Bearer Token；为空时 `/mcp` 不启用 |
+| `SMS_HUB_MCP_ALLOW_WRITE` | `false` | 是否允许 MCP 调用 `send_sms` 等写操作 |
 
 使用外部 MQTT Broker 时：
 

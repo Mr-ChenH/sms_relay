@@ -14,6 +14,7 @@ import (
 
 	"sms-forwarding/server/api/internal/httpapi"
 	"sms-forwarding/server/api/internal/lpa"
+	"sms-forwarding/server/api/internal/mcpserver"
 	"sms-forwarding/server/api/internal/mqttbridge"
 	"sms-forwarding/server/api/internal/mqttserver"
 	"sms-forwarding/server/api/internal/notify"
@@ -61,6 +62,7 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	defer s.Close()
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -81,9 +83,21 @@ func main() {
 	}
 
 	api := httpapi.New(s, notify.NewClient(appriseBaseURL), lpaRunner)
+	mcpAPI := mcpserver.New(s, mcpserver.Config{
+		Token:      os.Getenv("SMS_HUB_MCP_TOKEN"),
+		AllowWrite: os.Getenv("SMS_HUB_MCP_ALLOW_WRITE") == "true",
+	})
+	rootHandler := api.Handler()
+	if mcpAPI.Enabled() {
+		mux := http.NewServeMux()
+		mux.Handle("/mcp", mcpAPI.Handler())
+		mux.Handle("/", rootHandler)
+		rootHandler = mux
+		log.Printf("MCP enabled at /mcp (write=%t)", os.Getenv("SMS_HUB_MCP_ALLOW_WRITE") == "true")
+	}
 	go runSubscriptionReminders(ctx, s, notify.NewClient(appriseBaseURL))
 	log.Printf("sms hub api listening on %s, apprise=%s, db=%s, mqtt=%s", addr, appriseBaseURL, dbPath, mqttBroker)
-	if err := http.ListenAndServe(addr, api.Handler()); err != nil {
+	if err := http.ListenAndServe(addr, rootHandler); err != nil {
 		log.Fatal(err)
 	}
 }
