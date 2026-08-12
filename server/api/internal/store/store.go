@@ -504,7 +504,7 @@ func RenderAppriseMessage(target model.AppriseTarget, sms model.SMSMessage) (tit
 		"{{sender}}":    sms.Sender,
 		"{{body}}":      sms.Body,
 		"{{device}}":    sms.DeviceName,
-		"{{timestamp}}": sms.Timestamp.Format(time.RFC3339),
+		"{{timestamp}}": formatLocalTimestamp(sms.Timestamp),
 		"{{tag}}":       sms.Tag,
 	}
 	for placeholder, value := range replacements {
@@ -512,6 +512,13 @@ func RenderAppriseMessage(target model.AppriseTarget, sms model.SMSMessage) (tit
 		bodyTemplate = strings.ReplaceAll(bodyTemplate, placeholder, value)
 	}
 	return titleTemplate, bodyTemplate, strings.Join(target.Tags, ",")
+}
+
+func formatLocalTimestamp(timestamp time.Time) string {
+	if timestamp.IsZero() {
+		return ""
+	}
+	return timestamp.In(time.Local).Format(time.RFC3339)
 }
 
 func (s *Store) Rules() []model.RoutingRule {

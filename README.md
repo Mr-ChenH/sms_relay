@@ -441,6 +441,7 @@ Profile 下载由服务端运行的 `lpac` LPA 完成。Go API 通过 MQTT APDU 
 | `SMS_HUB_PUBLIC_BASE_URL` | 空 | 管理台展示给终端的公开 API 地址 |
 | `SMS_HUB_PUBLIC_MQTT_BROKER` | 空 | 管理台展示给终端的公开 MQTT 地址 |
 | `LPAC_PATH` | `lpac` | Linux 服务端 lpac 可执行文件路径；Windows 不支持下载 |
+| `TZ` | 使用系统时区；Docker Compose 默认为 `Asia/Shanghai` | 转发消息等服务端时间的本地时区，例如 `Asia/Shanghai`、`America/New_York` |
 
 使用外部 MQTT Broker 时：
 

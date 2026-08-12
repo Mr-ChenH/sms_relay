@@ -31,6 +31,34 @@ func TestRoutedAppriseTargets(t *testing.T) {
 	assertTargetIDs(t, s.RoutedAppriseTargets(nonMatching))
 }
 
+func TestRenderAppriseMessageUsesLocalTimezone(t *testing.T) {
+	originalLocal := time.Local
+	t.Cleanup(func() { time.Local = originalLocal })
+	time.Local = time.FixedZone("UTC+8", 8*60*60)
+
+	target := model.AppriseTarget{
+		TitleTemplate: "短信来自 {{sender}}",
+		BodyTemplate:  "{{body}}\n时间: {{timestamp}}",
+		Tags:          []string{"verification"},
+	}
+	sms := model.SMSMessage{
+		Sender:    "95588",
+		Body:      "验证码 123456",
+		Timestamp: time.Date(2026, time.August, 12, 7, 30, 0, 0, time.UTC),
+	}
+
+	title, body, tag := RenderAppriseMessage(target, sms)
+	if title != "短信来自 95588" {
+		t.Fatalf("title = %q", title)
+	}
+	if body != "验证码 123456\n时间: 2026-08-12T15:30:00+08:00" {
+		t.Fatalf("body = %q", body)
+	}
+	if tag != "verification" {
+		t.Fatalf("tag = %q", tag)
+	}
+}
+
 func TestRoutingRuleMatchesUsesAndBetweenFieldsAndOrBetweenKeywords(t *testing.T) {
 	rule := model.RoutingRule{
 		SenderContains: "bank",
