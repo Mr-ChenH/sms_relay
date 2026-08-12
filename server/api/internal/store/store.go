@@ -105,6 +105,13 @@ func (s *Store) initSQLite(ctx context.Context) error {
 	s.audit = state.Audit
 	s.commands = state.Commands
 	s.nextID = state.NextID
+	for i := range s.esimTasks {
+		if s.esimTasks[i].Status == "pending" || s.esimTasks[i].Status == "running" {
+			s.esimTasks[i].Status = "failed"
+			s.esimTasks[i].Stage = "服务端重启，LPA 下载会话无法恢复"
+			s.esimTasks[i].Progress = 0
+		}
+	}
 	if s.nextID < 100 {
 		s.nextID = 100
 	}
@@ -165,13 +172,15 @@ func (s *Store) Dashboard() model.Dashboard {
 			runningEsimTasks++
 		}
 	}
+	recentSMS := append([]model.SMSMessage{}, s.sms[:min(3, len(s.sms))]...)
+	s.populateSMSRecipientsLocked(recentSMS)
 	return model.Dashboard{
 		OnlineDevices:     online,
 		TotalDevices:      len(s.devices),
 		TodaySMS:          todaySMS,
 		DeliveryFailures:  deliveryFailures,
 		RunningEsimTasks:  runningEsimTasks,
-		RecentSMS:         append([]model.SMSMessage{}, s.sms[:min(3, len(s.sms))]...),
+		RecentSMS:         recentSMS,
 		Alerts:            []model.Alert{},
 		EsimSubscriptions: append([]model.EsimSubscription{}, s.esimSubscriptions...),
 	}
@@ -188,16 +197,23 @@ func (s *Store) Devices() []model.Device {
 	return append([]model.Device{}, s.devices...)
 }
 
+func (s *Store) FindDevice(id string) (model.Device, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.findDeviceLocked(id)
+}
+
 func (s *Store) SMS(query string, page, pageSize int) model.SMSList {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	items := append([]model.SMSMessage{}, s.sms...)
+	s.populateSMSRecipientsLocked(items)
 	if query != "" {
 		filtered := make([]model.SMSMessage, 0, len(items))
 		q := strings.ToLower(query)
 		for _, item := range items {
-			if strings.Contains(strings.ToLower(item.Body), q) || strings.Contains(strings.ToLower(item.Sender), q) || strings.Contains(strings.ToLower(item.ID), q) {
+			if strings.Contains(strings.ToLower(item.Body), q) || strings.Contains(strings.ToLower(item.Sender), q) || strings.Contains(strings.ToLower(item.Recipient), q) || strings.Contains(strings.ToLower(item.ID), q) {
 				filtered = append(filtered, item)
 			}
 		}
@@ -222,6 +238,17 @@ func (s *Store) SMS(query string, page, pageSize int) model.SMSList {
 		earliest = s.sms[len(s.sms)-1].Timestamp
 	}
 	return model.SMSList{Items: items[start:end], Total: len(items), Page: page, PageSize: pageSize, TotalAll: len(s.sms), EarliestAt: earliest}
+}
+
+func (s *Store) populateSMSRecipientsLocked(items []model.SMSMessage) {
+	for i := range items {
+		if items[i].Recipient != "" {
+			continue
+		}
+		if device, ok := s.findDeviceLocked(items[i].DeviceID); ok {
+			items[i].Recipient = device.PhoneNumber
+		}
+	}
 }
 
 func (s *Store) AppriseServices() []model.AppriseService {
@@ -734,29 +761,59 @@ func (s *Store) CreateEsimTask(req model.CreateEsimTaskRequest) (model.EsimTask,
 	if !ok {
 		return model.EsimTask{}, errors.New("device not found")
 	}
+	if deviceStatusAt(device, time.Now()) != "online" {
+		return model.EsimTask{}, errors.New("terminal is offline")
+	}
 	activationCode := strings.TrimSpace(req.ActivationCode)
-	if activationCode == "" {
-		return model.EsimTask{}, errors.New("activationCode is required")
+	if !strings.HasPrefix(strings.ToUpper(activationCode), "LPA:1$") {
+		return model.EsimTask{}, errors.New("activationCode must use the LPA:1$ format")
 	}
-	task := model.EsimTask{ID: s.nextIDStringLocked("esim-task"), DeviceID: device.ID, Type: "download_profile", Status: "pending", Stage: "等待终端领取 eSIM 下载命令", Progress: 0}
+	for _, existing := range s.esimTasks {
+		if existing.DeviceID == device.ID && (existing.Status == "pending" || existing.Status == "running") {
+			return model.EsimTask{}, errors.New("another eSIM download is already running on this terminal")
+		}
+	}
+	auditID := s.nextIDStringLocked("audit")
+	task := model.EsimTask{
+		ID: s.nextIDStringLocked("esim-task"), DeviceID: device.ID, AuditID: auditID, Type: "download_profile",
+		Status: "pending", Stage: "等待 LPA 启动", Progress: 0,
+	}
 	s.esimTasks = append([]model.EsimTask{task}, s.esimTasks...)
-	cmd := model.DeviceCommand{
-		ID:       s.nextIDStringLocked("cmd"),
-		DeviceID: device.ID,
-		Type:     "esim_download_profile",
-		Payload: map[string]interface{}{
-			"taskId":           task.ID,
-			"activationCode":   activationCode,
-			"smdpAddress":      strings.TrimSpace(req.SMDPAddress),
-			"confirmationCode": strings.TrimSpace(req.ConfirmationCode),
-		},
-		Status:    "pending",
-		CreatedAt: time.Now(),
-	}
-	s.commands = append(s.commands, cmd)
-	s.audit = append([]model.AuditLog{{ID: s.nextIDStringLocked("audit"), CommandID: cmd.ID, Actor: "admin", DeviceName: device.Name, Action: "esim_download_profile", ParameterSummary: maskActivationCode(activationCode), Result: "pending", CreatedAt: time.Now()}}, s.audit...)
-	s.notifyCommandCreatedLocked(cmd, device)
+	s.audit = append([]model.AuditLog{{
+		ID: auditID, Actor: "admin", DeviceName: device.Name,
+		Action: "esim_download_profile", ParameterSummary: maskActivationCode(activationCode),
+		Result: "pending", CreatedAt: time.Now(),
+	}}, s.audit...)
 	return task, nil
+}
+
+func (s *Store) UpdateEsimTask(id, status, stage string, progress int) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	defer s.persistLocked()
+
+	if progress < 0 {
+		progress = 0
+	}
+	if progress > 100 {
+		progress = 100
+	}
+	for i := range s.esimTasks {
+		if s.esimTasks[i].ID != id {
+			continue
+		}
+		s.esimTasks[i].Status = status
+		s.esimTasks[i].Stage = stage
+		s.esimTasks[i].Progress = progress
+		for j := range s.audit {
+			if s.audit[j].ID == s.esimTasks[i].AuditID {
+				s.audit[j].Result = status
+				break
+			}
+		}
+		return nil
+	}
+	return errors.New("eSIM task not found")
 }
 
 func (s *Store) EsimSubscriptions() []model.EsimSubscription {
@@ -1337,7 +1394,7 @@ func (s *Store) StoreTerminalSMS(req model.TerminalSMSRequest) (model.SMSMessage
 	if timestamp.IsZero() {
 		timestamp = time.Now()
 	}
-	message := model.SMSMessage{ID: s.nextIDStringLocked("sms"), TerminalMessageID: req.TerminalMessageID, DeviceID: device.ID, DeviceName: device.Name, Sender: req.Sender, Body: req.Body, Timestamp: timestamp, Tag: classifySMS(req.Sender, req.Body), DeliveryStatus: "success", DeliverySummary: "已入库", ConcatInfo: firstNonEmpty(req.ConcatInfo, "1/1")}
+	message := model.SMSMessage{ID: s.nextIDStringLocked("sms"), TerminalMessageID: req.TerminalMessageID, DeviceID: device.ID, DeviceName: device.Name, Sender: req.Sender, Recipient: firstNonEmpty(strings.TrimSpace(req.Recipient), device.PhoneNumber), Body: req.Body, Timestamp: timestamp, Tag: classifySMS(req.Sender, req.Body), DeliveryStatus: "success", DeliverySummary: "已入库", ConcatInfo: firstNonEmpty(req.ConcatInfo, "1/1")}
 	s.sms = append([]model.SMSMessage{message}, s.sms...)
 	s.logs = append([]model.LogEntry{{ID: s.nextIDStringLocked("log"), DeviceID: device.ID, DeviceName: device.Name, Level: "info", Message: fmt.Sprintf("SMS uploaded sender=%s len=%d", req.Sender, len([]rune(req.Body))), CreatedAt: time.Now()}}, s.logs...)
 	if inserted := true; inserted {
@@ -1360,6 +1417,29 @@ func (s *Store) StoreTerminalLogs(req model.TerminalLogRequest) error {
 		s.logs = append([]model.LogEntry{{ID: s.nextIDStringLocked("log"), DeviceID: device.ID, DeviceName: device.Name, Level: level, Message: item.Message, CreatedAt: time.Now()}}, s.logs...)
 	}
 	return nil
+}
+
+func (s *Store) UpdateCommandStatus(commandID string, req model.TerminalCommandResultRequest) (model.DeviceCommand, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	defer s.persistLocked()
+
+	device, ok := s.findDeviceLocked(req.DeviceID)
+	if !ok {
+		return model.DeviceCommand{}, errors.New("device not found")
+	}
+	now := time.Now()
+	for i := range s.commands {
+		if s.commands[i].ID == commandID && s.commands[i].DeviceID == device.ID {
+			s.commands[i].Status = firstNonEmpty(req.Status, "claimed")
+			if s.commands[i].Status == "claimed" && s.commands[i].ClaimedAt == nil {
+				s.commands[i].ClaimedAt = &now
+			}
+			s.updateCommandAuditLocked(commandID, s.commands[i].Status)
+			return s.commands[i], nil
+		}
+	}
+	return model.DeviceCommand{}, errors.New("command not found")
 }
 
 func (s *Store) CompleteCommand(commandID string, req model.TerminalCommandResultRequest) (model.DeviceCommand, error) {

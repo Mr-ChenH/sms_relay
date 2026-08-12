@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"sms-forwarding/server/api/internal/httpapi"
+	"sms-forwarding/server/api/internal/lpa"
 	"sms-forwarding/server/api/internal/mqttbridge"
 	"sms-forwarding/server/api/internal/mqttserver"
 	"sms-forwarding/server/api/internal/notify"
@@ -72,12 +73,14 @@ func main() {
 	}
 
 	bridge := mqttbridge.New(s, mqttBroker, mqttClientID, mqttUsername, mqttPassword)
+	var lpaRunner *lpa.Runner
 	if bridge.Enabled() {
 		s.SetCommandCreatedHook(bridge.PublishCommand)
 		bridge.Start(ctx)
+		lpaRunner = lpa.NewRunner(bridge, s)
 	}
 
-	api := httpapi.New(s, notify.NewClient(appriseBaseURL))
+	api := httpapi.New(s, notify.NewClient(appriseBaseURL), lpaRunner)
 	go runSubscriptionReminders(ctx, s, notify.NewClient(appriseBaseURL))
 	log.Printf("sms hub api listening on %s, apprise=%s, db=%s, mqtt=%s", addr, appriseBaseURL, dbPath, mqttBroker)
 	if err := http.ListenAndServe(addr, api.Handler()); err != nil {

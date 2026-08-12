@@ -27,6 +27,7 @@ static void markDirty() {
 static void clearItem(QueuedSMS& item) {
   item.messageId = "";
   item.sender = "";
+  item.recipient = "";
   item.body = "";
   item.timestamp = "";
 }
@@ -49,12 +50,13 @@ static bool persistQueue() {
   }
 
   JsonDocument doc;
-  doc["version"] = 1;
+  doc["version"] = 2;
   JsonArray items = doc["items"].to<JsonArray>();
   for (size_t i = 0; i < queueCount; i++) {
     JsonObject row = items.add<JsonObject>();
     row["id"] = queueItems[i].messageId;
     row["sender"] = queueItems[i].sender;
+    row["recipient"] = queueItems[i].recipient;
     row["body"] = queueItems[i].body;
     row["timestamp"] = queueItems[i].timestamp;
   }
@@ -104,7 +106,8 @@ bool smsQueueInit() {
   JsonDocument doc;
   DeserializationError error = deserializeJson(doc, file);
   file.close();
-  if (error || (doc["version"] | 0) != 1) {
+  int version = doc["version"] | 0;
+  if (error || (version != 1 && version != 2)) {
     logCaptureLn("短信队列文件损坏，已隔离");
     LittleFS.remove(QUEUE_TEMP_PATH);
     LittleFS.rename(QUEUE_PATH, QUEUE_TEMP_PATH);
@@ -116,10 +119,11 @@ bool smsQueueInit() {
     if (queueCount >= MAX_QUEUE_ITEMS) break;
     const char* id = row["id"] | "";
     const char* sender = row["sender"] | "";
+    const char* recipient = row["recipient"] | "";
     const char* body = row["body"] | "";
     const char* timestamp = row["timestamp"] | "";
-    if (!id[0] || strlen(id) > 96 || strlen(sender) > 48 || strlen(body) > 2048 || strlen(timestamp) > 48) continue;
-    queueItems[queueCount++] = {String(id), String(sender), String(body), String(timestamp)};
+    if (!id[0] || strlen(id) > 96 || strlen(sender) > 48 || strlen(recipient) > 48 || strlen(body) > 2048 || strlen(timestamp) > 48) continue;
+    queueItems[queueCount++] = {String(id), String(sender), String(recipient), String(body), String(timestamp)};
   }
 
   if (queueCount > 0) logCaptureLn(String("已恢复短信待发队列: ") + String(queueCount));

@@ -3,27 +3,39 @@ package mqttbridge
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"log"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	mqtt "github.com/eclipse/paho.mqtt.golang"
 
+	"sms-forwarding/server/api/internal/lpa"
 	"sms-forwarding/server/api/internal/model"
 	"sms-forwarding/server/api/internal/store"
 )
 
 type Bridge struct {
-	store    *store.Store
-	client   mqtt.Client
-	broker   string
-	clientID string
-	username string
-	password string
+	store       *store.Store
+	client      mqtt.Client
+	broker      string
+	clientID    string
+	username    string
+	password    string
+	apduSeq     atomic.Uint64
+	apduMu      sync.Mutex
+	apduPending map[string]chan lpa.APDUResponse
+	deviceLocks sync.Map
 }
 
 func New(store *store.Store, broker, clientID, username, password string) *Bridge {
-	return &Bridge{store: store, broker: strings.TrimSpace(broker), clientID: firstNonEmpty(clientID, "sms-hub-api"), username: username, password: password}
+	return &Bridge{
+		store: store, broker: strings.TrimSpace(broker), clientID: firstNonEmpty(clientID, "sms-hub-api"),
+		username: username, password: password, apduPending: make(map[string]chan lpa.APDUResponse),
+	}
 }
 
 func (b *Bridge) Enabled() bool {
@@ -89,15 +101,93 @@ func (b *Bridge) PublishCommand(command model.DeviceCommand, device model.Device
 	}
 }
 
+func (b *Bridge) Exchange(ctx context.Context, deviceID string, request lpa.APDURequest) (lpa.APDUResponse, error) {
+	if b.client == nil || !b.client.IsConnectionOpen() {
+		return lpa.APDUResponse{}, errors.New("MQTT bridge is not connected")
+	}
+	lockValue, _ := b.deviceLocks.LoadOrStore(deviceID, &sync.Mutex{})
+	deviceLock := lockValue.(*sync.Mutex)
+	deviceLock.Lock()
+	defer deviceLock.Unlock()
+
+	requestID := fmt.Sprintf("apdu-%d", b.apduSeq.Add(1))
+	responseCh := make(chan lpa.APDUResponse, 1)
+	b.apduMu.Lock()
+	b.apduPending[requestID] = responseCh
+	b.apduMu.Unlock()
+	defer func() {
+		b.apduMu.Lock()
+		delete(b.apduPending, requestID)
+		b.apduMu.Unlock()
+	}()
+
+	payload, err := json.Marshal(map[string]interface{}{
+		"requestId": requestID,
+		"func":      request.Func,
+		"param":     request.Param,
+	})
+	if err != nil {
+		return lpa.APDUResponse{}, err
+	}
+	topic := "sms-hub/devices/" + deviceID + "/esim/apdu/request"
+	token := b.client.Publish(topic, 1, false, payload)
+	if !token.WaitTimeout(5 * time.Second) {
+		return lpa.APDUResponse{}, errors.New("timed out publishing APDU request")
+	}
+	if token.Error() != nil {
+		return lpa.APDUResponse{}, token.Error()
+	}
+
+	timer := time.NewTimer(30 * time.Second)
+	defer timer.Stop()
+	select {
+	case response := <-responseCh:
+		if response.ECode < 0 {
+			return response, errors.New(firstNonEmpty(response.Error, "terminal APDU operation failed"))
+		}
+		return response, nil
+	case <-ctx.Done():
+		return lpa.APDUResponse{}, ctx.Err()
+	case <-timer.C:
+		return lpa.APDUResponse{}, errors.New("terminal APDU response timed out")
+	}
+}
+
+func (b *Bridge) deliverAPDUResponse(payload []byte) {
+	var response struct {
+		RequestID string `json:"requestId"`
+		ECode     int    `json:"ecode"`
+		Data      string `json:"data"`
+		Error     string `json:"error"`
+	}
+	if !decode(payload, &response) || response.RequestID == "" {
+		return
+	}
+	b.apduMu.Lock()
+	responseCh := b.apduPending[response.RequestID]
+	b.apduMu.Unlock()
+	if responseCh != nil {
+		if response.ECode < 0 || response.Error != "" {
+			log.Printf("mqtt APDU response failed request=%s ecode=%d error=%s", response.RequestID, response.ECode, response.Error)
+		}
+		select {
+		case responseCh <- lpa.APDUResponse{ECode: response.ECode, Data: response.Data, Error: response.Error}:
+		default:
+		}
+	}
+}
+
 func (b *Bridge) subscribe(client mqtt.Client) {
 	subs := map[string]byte{
-		"sms-hub/devices/+/register":          1,
-		"sms-hub/devices/+/heartbeat":         1,
-		"sms-hub/devices/+/sms":               1,
-		"sms-hub/devices/+/logs":              1,
-		"sms-hub/devices/+/esim/profiles":     1,
-		"sms-hub/devices/+/commands/+/result": 1,
-		"sms-hub/devices/+/status":            1,
+		"sms-hub/devices/+/register":           1,
+		"sms-hub/devices/+/heartbeat":          1,
+		"sms-hub/devices/+/sms":                1,
+		"sms-hub/devices/+/logs":               1,
+		"sms-hub/devices/+/esim/profiles":      1,
+		"sms-hub/devices/+/esim/apdu/response": 1,
+		"sms-hub/devices/+/commands/+/status":  1,
+		"sms-hub/devices/+/commands/+/result":  1,
+		"sms-hub/devices/+/status":             1,
 	}
 	if token := client.SubscribeMultiple(subs, b.handleMessage); token.Wait() && token.Error() != nil {
 		log.Printf("mqtt subscribe failed: %v", token.Error())
@@ -147,7 +237,9 @@ func (b *Bridge) handleMessage(_ mqtt.Client, msg mqtt.Message) {
 			}
 		}
 	case "esim":
-		if len(parts) >= 5 && parts[4] == "profiles" {
+		if len(parts) >= 6 && parts[4] == "apdu" && parts[5] == "response" {
+			b.deliverAPDUResponse(payload)
+		} else if len(parts) >= 5 && parts[4] == "profiles" {
 			var req model.TerminalEsimProfilesRequest
 			if decode(payload, &req) {
 				req.DeviceID = firstNonEmpty(req.DeviceID, deviceID)
@@ -157,7 +249,15 @@ func (b *Bridge) handleMessage(_ mqtt.Client, msg mqtt.Message) {
 			}
 		}
 	case "commands":
-		if len(parts) >= 6 && parts[5] == "result" {
+		if len(parts) >= 6 && parts[5] == "status" {
+			var req model.TerminalCommandResultRequest
+			if decode(payload, &req) {
+				req.DeviceID = firstNonEmpty(req.DeviceID, deviceID)
+				if _, err := b.store.UpdateCommandStatus(parts[4], req); err != nil {
+					log.Printf("mqtt command status failed device=%s command=%s: %v", deviceID, parts[4], err)
+				}
+			}
+		} else if len(parts) >= 6 && parts[5] == "result" {
 			var req model.TerminalCommandResultRequest
 			if decode(payload, &req) {
 				req.DeviceID = firstNonEmpty(req.DeviceID, deviceID)

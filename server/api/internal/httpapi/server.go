@@ -6,10 +6,12 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
 
+	"sms-forwarding/server/api/internal/lpa"
 	"sms-forwarding/server/api/internal/model"
 	"sms-forwarding/server/api/internal/notify"
 	"sms-forwarding/server/api/internal/store"
@@ -20,10 +22,14 @@ type Server struct {
 	notifier         *notify.Client
 	publicBaseURL    string
 	publicMQTTBroker string
+	lpaRunner        *lpa.Runner
 }
 
-func New(s *store.Store, notifier *notify.Client) *Server {
+func New(s *store.Store, notifier *notify.Client, runners ...*lpa.Runner) *Server {
 	server := &Server{store: s, notifier: notifier, publicBaseURL: strings.TrimSpace(os.Getenv("SMS_HUB_PUBLIC_BASE_URL")), publicMQTTBroker: strings.TrimSpace(os.Getenv("SMS_HUB_PUBLIC_MQTT_BROKER"))}
+	if len(runners) > 0 {
+		server.lpaRunner = runners[0]
+	}
 	s.SetSMSStoredHook(func(sms model.SMSMessage) {
 		server.dispatchSMS(context.Background(), sms)
 	})
@@ -57,6 +63,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("PUT /api/admin/routing-rules/{id}", s.updateRule)
 	mux.HandleFunc("DELETE /api/admin/routing-rules/{id}", s.deleteRule)
 	mux.HandleFunc("GET /api/admin/esim/profiles", s.esimProfiles)
+	mux.HandleFunc("GET /api/admin/esim/capabilities", s.esimCapabilities)
 	mux.HandleFunc("GET /api/admin/esim/tasks", s.esimTasks)
 	mux.HandleFunc("POST /api/admin/esim/tasks", s.createEsimTask)
 	mux.HandleFunc("GET /api/admin/esim/subscriptions", s.esimSubscriptions)
@@ -317,6 +324,24 @@ func (s *Server) deleteRule(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, model.APIResponse{Success: true, Data: map[string]string{"status": "deleted"}})
 }
 
+func (s *Server) esimCapabilities(w http.ResponseWriter, r *http.Request) {
+	supported := false
+	reason := "LPA runner is not configured"
+	if s.lpaRunner != nil {
+		if err := s.lpaRunner.Available(); err != nil {
+			reason = err.Error()
+		} else {
+			supported = true
+			reason = ""
+		}
+	}
+	writeJSON(w, http.StatusOK, model.APIResponse{Success: true, Data: map[string]interface{}{
+		"profileDownload": supported,
+		"platform":        runtime.GOOS,
+		"reason":          reason,
+	}})
+}
+
 func (s *Server) esimProfiles(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, model.APIResponse{Success: true, Data: s.store.EsimProfiles()})
 }
@@ -330,9 +355,28 @@ func (s *Server) createEsimTask(w http.ResponseWriter, r *http.Request) {
 	if !decodeJSON(w, r, &req) {
 		return
 	}
+	if s.lpaRunner == nil {
+		writeJSON(w, http.StatusServiceUnavailable, model.APIResponse{Success: false, Error: "LPA runner is not configured"})
+		return
+	}
+	if err := s.lpaRunner.Available(); err != nil {
+		writeJSON(w, http.StatusServiceUnavailable, model.APIResponse{Success: false, Error: err.Error()})
+		return
+	}
 	task, err := s.store.CreateEsimTask(req)
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, model.APIResponse{Success: false, Error: err.Error()})
+		return
+	}
+	device, ok := s.store.FindDevice(task.DeviceID)
+	if !ok || strings.TrimSpace(device.DeviceID) == "" {
+		_ = s.store.UpdateEsimTask(task.ID, "failed", "无法解析终端 MQTT ID", 0)
+		writeJSON(w, http.StatusServiceUnavailable, model.APIResponse{Success: false, Error: "terminal MQTT ID is unavailable"})
+		return
+	}
+	if err := s.lpaRunner.Start(task.ID, device.DeviceID, strings.TrimSpace(req.ActivationCode), strings.TrimSpace(req.ConfirmationCode)); err != nil {
+		_ = s.store.UpdateEsimTask(task.ID, "failed", "无法启动 LPA："+err.Error(), 0)
+		writeJSON(w, http.StatusServiceUnavailable, model.APIResponse{Success: false, Error: err.Error()})
 		return
 	}
 	writeJSON(w, http.StatusCreated, model.APIResponse{Success: true, Data: task})

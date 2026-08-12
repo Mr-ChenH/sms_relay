@@ -33,6 +33,7 @@ export interface SMSMessage {
   deviceId: string
   deviceName: string
   sender: string
+  recipient: string
   body: string
   timestamp: string
   tag: string
@@ -126,6 +127,12 @@ export interface CreateRoutingRuleRequest {
 
 export type UpdateRoutingRuleRequest = CreateRoutingRuleRequest
 
+export interface EsimCapabilities {
+  profileDownload: boolean
+  platform: string
+  reason: string
+}
+
 export interface EsimProfile {
   id: string
   deviceId: string
@@ -136,6 +143,16 @@ export interface EsimProfile {
   country: string
   profileName: string
   state: string
+}
+
+export interface EsimOperationTask {
+  id: string
+  deviceId: string
+  type: string
+  status: string
+  stage: string
+  progress: number
+  createdAt?: string
 }
 
 export interface EsimTask {

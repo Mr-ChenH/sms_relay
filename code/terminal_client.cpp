@@ -4,6 +4,8 @@
 #include "logger.h"
 #include "modem.h"
 #include "esim.h"
+#include "esim_at.h"
+#include "esim_tlv.h"
 #include "sms_queue.h"
 #include <ArduinoJson.h>
 #include <WiFiClient.h>
@@ -34,6 +36,9 @@ static PubSubClient mqttClient(mqttWifiClient);
 static bool mqttConfigured = false;
 static bool commandExecuting = false;
 static String pendingCommandPayload;
+static String pendingApduPayload;
+static bool apduSessionConnected = false;
+static int apduLogicalChannel = 0;
 static String activeCommandId;
 static String lastCompletedCommandId;
 static String pendingResultCommandId;
@@ -251,6 +256,7 @@ static void flushSMSQueue() {
     doc["deviceId"] = terminalDeviceID();
     doc["terminalMessageId"] = item->messageId;
     doc["sender"] = item->sender;
+    doc["recipient"] = item->recipient;
     doc["body"] = item->body;
     doc["timestamp"] = item->timestamp;
     doc["concatInfo"] = "1/1";
@@ -264,6 +270,7 @@ void terminalReportSMS(const char* sender, const char* text, const char* timesta
   QueuedSMS item;
   item.messageId = terminalDeviceID() + "-" + String(millis()) + "-" + String(++smsSequence);
   item.sender = sender ? sender : "";
+  item.recipient = cachedPhoneNumber;
   item.body = text ? text : "";
   String ts = currentTimestampISO();
   item.timestamp = ts.length() > 0 ? ts : String(timestamp ? timestamp : "");
@@ -456,11 +463,18 @@ static bool executeCommand(const String& type, JsonVariantConst payload, String&
     return ok;
   }
   if (type == "esim_download_profile") {
-    result = "download profile command is not implemented on terminal yet";
+    result = "profile downloads are executed by the server LPA APDU session";
     return false;
   }
   result = "unsupported command type: " + type;
   return false;
+}
+
+static bool publishCommandStatus(const String& commandId, const String& status) {
+  JsonDocument doc;
+  doc["deviceId"] = terminalDeviceID();
+  doc["status"] = status;
+  return publishJSON("/commands/" + commandId + "/status", doc, false);
 }
 
 static bool publishCommandResult(const String& commandId, bool ok, const String& result) {
@@ -486,6 +500,85 @@ static void flushCommandResult() {
   }
 }
 
+static void handleApduPayload(const String& payloadText) {
+  JsonDocument request;
+  JsonDocument response;
+  DeserializationError jsonError = deserializeJson(request, payloadText);
+  String requestId = request["requestId"] | "";
+  String function = request["func"] | "";
+  String param = request["param"] | "";
+  response["requestId"] = requestId;
+  response["ecode"] = -1;
+
+  if (jsonError || requestId.length() == 0 || function.length() == 0) {
+    response["error"] = "invalid APDU request";
+    publishJSON("/esim/apdu/response", response, false);
+    return;
+  }
+
+  if (function == "connect") {
+    apduSessionConnected = true;
+    response["ecode"] = 0;
+  } else if (function == "disconnect") {
+    for (int channel = 1; channel <= 8; channel++) {
+      esimSendAT((String("AT+CCHC=") + channel).c_str(), 2000);
+    }
+    apduSessionConnected = false;
+    apduLogicalChannel = 0;
+    response["ecode"] = 0;
+    publishJSON("/esim/apdu/response", response, false);
+    terminalSyncEsimProfiles();
+    return;
+  } else if (!apduSessionConnected) {
+    response["error"] = "APDU session is not connected";
+  } else if (function == "logic_channel_open") {
+    if (!esimIsHexString(param) || param.length() == 0 || param.length() > 64) {
+      response["error"] = "invalid AID";
+    } else {
+      String atResponse = esimSendAT((String("AT+CCHO=\"") + param + "\"").c_str(), 10000);
+      String channelText;
+      if (esimParseATPayload(atResponse, "+CCHO:", &channelText)) {
+        int channel = channelText.toInt();
+        apduLogicalChannel = channel > 0 ? channel : 0;
+        response["ecode"] = channel > 0 ? channel : -1;
+        if (channel <= 0) response["error"] = "invalid logical channel";
+      } else {
+        response["error"] = esimCompactATResponse(atResponse);
+      }
+    }
+  } else if (function == "logic_channel_close") {
+    if (!esimIsHexString(param) || param.length() != 2) {
+      response["error"] = "invalid logical channel";
+    } else {
+      int channel = (int)strtol(param.c_str(), nullptr, 16);
+      String atResponse = esimSendAT((String("AT+CCHC=") + channel).c_str(), 5000);
+      bool ok = atResponse.indexOf("OK") >= 0;
+      if (ok && channel == apduLogicalChannel) apduLogicalChannel = 0;
+      response["ecode"] = ok ? 0 : -1;
+      if (!ok) response["error"] = esimCompactATResponse(atResponse);
+    }
+  } else if (function == "transmit") {
+    if (apduLogicalChannel <= 0) {
+      response["error"] = "logical channel is not open";
+    } else if (!esimIsHexString(param) || param.length() < 8 || param.length() > 600) {
+      response["error"] = "invalid or oversized APDU";
+    } else {
+      String command = "AT+CGLA=" + String(apduLogicalChannel) + "," + String(param.length()) + ",\"" + param + "\"";
+      String atResponse = esimSendAT(command.c_str(), 30000);
+      String responseHex;
+      if (esimParseCGLAHexPayload(atResponse, &responseHex) && esimIsHexString(responseHex)) {
+        response["ecode"] = 0;
+        response["data"] = responseHex;
+      } else {
+        response["error"] = esimCompactATResponse(atResponse);
+      }
+    }
+  } else {
+    response["error"] = "unsupported APDU function";
+  }
+  publishJSON("/esim/apdu/response", response, false);
+}
+
 static void handleCommandPayload(const String& payloadText) {
   JsonDocument doc;
   DeserializationError err = deserializeJson(doc, payloadText);
@@ -494,6 +587,7 @@ static void handleCommandPayload(const String& payloadText) {
   String type = doc["type"] | "";
   if (commandId.length() == 0 || type.length() == 0 || commandId == lastCompletedCommandId) return;
   activeCommandId = commandId;
+  publishCommandStatus(commandId, "claimed");
   String result;
   commandExecuting = true;
   bool ok = executeCommand(type, doc["payload"], result);
@@ -506,10 +600,14 @@ static void handleCommandPayload(const String& payloadText) {
 
 static void mqttCallback(char* topic, byte* payload, unsigned int length) {
   String topicText = String(topic);
-  if (topicText != mqttBaseTopic() + "/commands" || commandExecuting || pendingCommandPayload.length() > 0) return;
   String incoming;
   incoming.reserve(length + 1);
   for (unsigned int i = 0; i < length; i++) incoming += (char)payload[i];
+  if (topicText == mqttBaseTopic() + "/esim/apdu/request") {
+    if (pendingApduPayload.length() == 0) pendingApduPayload = incoming;
+    return;
+  }
+  if (topicText != mqttBaseTopic() + "/commands" || commandExecuting || pendingCommandPayload.length() > 0) return;
   if ((activeCommandId.length() > 0 && incoming.indexOf(String("\"id\":\"") + activeCommandId + "\"") >= 0) ||
       (pendingResultCommandId.length() > 0 && incoming.indexOf(String("\"id\":\"") + pendingResultCommandId + "\"") >= 0) ||
       (lastCompletedCommandId.length() > 0 && incoming.indexOf(String("\"id\":\"") + lastCompletedCommandId + "\"") >= 0)) return;
@@ -517,7 +615,12 @@ static void mqttCallback(char* topic, byte* payload, unsigned int length) {
 }
 
 static void executePendingCommand() {
-  if (pendingCommandPayload.length() == 0 || commandExecuting) return;
+  if (pendingApduPayload.length() > 0 && !commandExecuting) {
+    String payload = pendingApduPayload;
+    pendingApduPayload = "";
+    handleApduPayload(payload);
+  }
+  if (pendingCommandPayload.length() == 0 || commandExecuting || apduSessionConnected) return;
   String payload = pendingCommandPayload;
   pendingCommandPayload = "";
   handleCommandPayload(payload);
@@ -559,7 +662,15 @@ static bool ensureMqttConnected() {
   lastMqttState = 0;
   lastMqttErrorLogAt = 0;
   logCaptureLn(String("MQTT 已连接: ") + host + ":" + String(port));
+  if (apduSessionConnected || apduLogicalChannel > 0) {
+    if (apduLogicalChannel > 0) esimSendAT((String("AT+CCHC=") + apduLogicalChannel).c_str(), 5000);
+    apduSessionConnected = false;
+    apduLogicalChannel = 0;
+    pendingApduPayload = "";
+    terminalReportLog("warn", "abandoned eSIM APDU session cleared after MQTT reconnect");
+  }
   mqttClient.subscribe((mqttBaseTopic() + "/commands").c_str(), 1);
+  mqttClient.subscribe((mqttBaseTopic() + "/esim/apdu/request").c_str(), 1);
   publishText("/status", "online", true);
   terminalRegister();
   terminalHeartbeat();

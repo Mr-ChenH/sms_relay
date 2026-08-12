@@ -6,6 +6,7 @@
 struct QueuedSMS {
   String messageId;
   String sender;
+  String recipient;
   String body;
   String timestamp;
 };

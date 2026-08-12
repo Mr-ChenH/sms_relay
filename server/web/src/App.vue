@@ -9,7 +9,7 @@ import LogsPage from './pages/LogsPage.vue'
 import OverviewPage from './pages/OverviewPage.vue'
 import SendSmsPage from './pages/SendSmsPage.vue'
 import ToolsPage from './pages/ToolsPage.vue'
-import type { AppriseService, AppriseTarget, AuditLog, CommandResult, CreateAppriseServiceRequest, CreateAppriseTargetRequest, CreateDeviceCommandRequest, CreateEsimSubscriptionRequest, CreateEsimTaskRequest, CreateRoutingRuleRequest, Dashboard, Device, DeviceCommand, EsimProfile, EsimSubscription, EsimTask, LogEntry, RoutingRule, SMSList, SMSMessage, Page } from './types'
+import type { AppriseService, AppriseTarget, AuditLog, CommandResult, CreateAppriseServiceRequest, CreateAppriseTargetRequest, CreateDeviceCommandRequest, CreateEsimSubscriptionRequest, CreateEsimTaskRequest, CreateRoutingRuleRequest, Dashboard, Device, DeviceCommand, EsimCapabilities, EsimOperationTask, EsimProfile, EsimSubscription, EsimTask, LogEntry, RoutingRule, SMSList, SMSMessage, Page } from './types'
 import { formatTime, statusClass } from './utils/ui'
 
 type BarcodeDetectorConstructor = new (options?: { formats?: string[] }) => {
@@ -34,6 +34,7 @@ const appriseServices = ref<AppriseService[]>([])
 const rules = ref<RoutingRule[]>([])
 const profiles = ref<EsimProfile[]>([])
 const esimTasks = ref<EsimTask[]>([])
+const esimCapabilities = ref<EsimCapabilities>({ profileDownload: false, platform: '', reason: '正在检查服务端能力' })
 const esimSubscriptions = ref<EsimSubscription[]>([])
 const logs = ref<LogEntry[]>([])
 const audit = ref<AuditLog[]>([])
@@ -53,7 +54,22 @@ const selectedEsimDevice = computed(() => devices.value.find((device) => device.
 const selectedSubscriptionDevice = computed(() => devices.value.find((device) => device.id === selectedSubscriptionDeviceId.value) ?? null)
 const selectedDeviceProfiles = computed(() => profiles.value.filter((profile) => profile.deviceId === selectedEsimDeviceId.value))
 const selectedDeviceEsimSyncLog = computed(() => logs.value.find((row) => row.deviceId === selectedEsimDeviceId.value && (row.message.includes('esim profile sync failed') || row.message.includes('eSIM profiles uploaded'))))
-const selectedDeviceTasks = computed(() => esimTasks.value.filter((task) => task.deviceId === selectedEsimDeviceId.value))
+const selectedDeviceTasks = computed<EsimOperationTask[]>(() => {
+  const downloads: EsimOperationTask[] = esimTasks.value
+    .filter((task) => task.deviceId === selectedEsimDeviceId.value)
+    .map((task) => ({ ...task }))
+  const profileCommands: EsimOperationTask[] = commands.value
+    .filter((command) => command.deviceId === selectedEsimDeviceId.value && ['esim_enable_profile', 'esim_delete_profile'].includes(command.type))
+    .map((command) => commandOperationTask(command))
+  return [...downloads, ...profileCommands].sort((a, b) => {
+    const timeDiff = new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime()
+    if (timeDiff !== 0) return timeDiff
+    return Number(b.id.split('-').pop() || 0) - Number(a.id.split('-').pop() || 0)
+  })
+})
+const activeDeviceTasks = computed(() => selectedDeviceTasks.value.filter((task) => !['succeeded', 'success', 'completed', 'failed'].includes(task.status)))
+const completedDeviceTasks = computed(() => selectedDeviceTasks.value.filter((task) => ['succeeded', 'success', 'completed', 'failed'].includes(task.status)))
+const activeEsimProfile = computed(() => selectedDeviceProfiles.value.find((profile) => profile.state === 'enabled') ?? null)
 const esimCommandPage = ref(1)
 const esimCommandPageSize = ref(10)
 const selectedEsimCommands = computed(() => commands.value
@@ -82,6 +98,7 @@ const sendForm = ref({ deviceId: '', phone: '', body: '' })
 const esimTaskForm = ref({ activationCode: '', smdpAddress: '', confirmationCode: '' })
 const esimTaskResult = ref('')
 const esimCommandResult = ref('')
+const showEsimTaskDialog = ref(false)
 const profileCommandBusy = ref<Record<string, boolean>>({})
 const toolDeviceId = ref('')
 const toolATCommand = ref('AT+CSQ')
@@ -171,12 +188,13 @@ async function loadRoutesPage() {
 }
 
 async function loadEsimPage() {
-  const [devs, esimProfiles, tasks, logRows, commandRows] = await Promise.all([
+  const [devs, esimProfiles, tasks, logRows, commandRows, capabilities] = await Promise.all([
     api.get<Device[]>('/api/admin/devices'),
     api.get<EsimProfile[]>('/api/admin/esim/profiles'),
     api.get<EsimTask[]>('/api/admin/esim/tasks'),
     api.get<LogEntry[]>('/api/admin/logs'),
-    api.get<DeviceCommand[]>('/api/admin/commands')
+    api.get<DeviceCommand[]>('/api/admin/commands'),
+    api.get<EsimCapabilities>('/api/admin/esim/capabilities')
   ])
   devices.value = devs
   applyDeviceDefaults(devs)
@@ -184,6 +202,29 @@ async function loadEsimPage() {
   esimTasks.value = tasks
   logs.value = logRows
   commands.value = commandRows
+  esimCapabilities.value = capabilities
+}
+
+async function refreshEsimOperations() {
+  if (refreshing.value) return
+  refreshing.value = true
+  try {
+    const [devs, esimProfiles, tasks, commandRows] = await Promise.all([
+      api.get<Device[]>('/api/admin/devices'),
+      api.get<EsimProfile[]>('/api/admin/esim/profiles'),
+      api.get<EsimTask[]>('/api/admin/esim/tasks'),
+      api.get<DeviceCommand[]>('/api/admin/commands')
+    ])
+    devices.value = devs
+    applyDeviceDefaults(devs)
+    profiles.value = esimProfiles
+    esimTasks.value = tasks
+    commands.value = commandRows
+  } catch (err) {
+    error.value = err instanceof Error ? err.message : 'eSIM 状态刷新失败'
+  } finally {
+    refreshing.value = false
+  }
 }
 
 async function loadSubscriptionsPage() {
@@ -297,8 +338,8 @@ async function runGlobalSearch() {
 
 function exportCurrentSms() {
   if (!sms.value) return
-  const headers = ['id', 'timestamp', 'deviceName', 'sender', 'tag', 'deliveryStatus', 'body']
-  const rows = sms.value.items.map((item) => [item.id, item.timestamp, item.deviceName, item.sender, item.tag, item.deliveryStatus, item.body])
+  const headers = ['id', 'timestamp', 'deviceName', 'sender', 'recipient', 'tag', 'deliveryStatus', 'body']
+  const rows = sms.value.items.map((item) => [item.id, item.timestamp, item.deviceName, item.sender, item.recipient, item.tag, item.deliveryStatus, item.body])
   const csv = [headers, ...rows].map((row) => row.map((cell) => `"${String(cell).replaceAll('"', '""')}"`).join(',')).join('\n')
   const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' })
   const url = URL.createObjectURL(blob)
@@ -336,12 +377,17 @@ async function createEsimTask() {
     smdpAddress: esimTaskForm.value.smdpAddress.trim(),
     confirmationCode: esimTaskForm.value.confirmationCode.trim()
   }
-  const task = await api.post<EsimTask>('/api/admin/esim/tasks', payload)
-  esimTasks.value = await api.get<EsimTask[]>('/api/admin/esim/tasks')
-  commands.value = await api.get<DeviceCommand[]>('/api/admin/commands')
-  audit.value = await api.get<AuditLog[]>('/api/admin/audit')
-  esimTaskResult.value = `已创建 eSIM 下载任务 ${task.id}`
-  esimTaskForm.value = { activationCode: '', smdpAddress: '', confirmationCode: '' }
+  try {
+    const task = await api.post<EsimTask>('/api/admin/esim/tasks', payload)
+    esimTasks.value = [task, ...esimTasks.value.filter((item) => item.id !== task.id)]
+    audit.value = await api.get<AuditLog[]>('/api/admin/audit')
+    esimTaskResult.value = `已启动 eSIM 下载任务 ${task.id}`
+    esimTaskForm.value = { activationCode: '', smdpAddress: '', confirmationCode: '' }
+    esimQrResult.value = ''
+    showEsimTaskDialog.value = false
+  } catch (err) {
+    esimTaskResult.value = err instanceof Error ? `下载任务启动失败：${err.message}` : '下载任务启动失败'
+  }
 }
 
 async function createDeviceCommand(payload: CreateDeviceCommandRequest, successMessage: string) {
@@ -381,6 +427,45 @@ function signalStatusClass(rssi: number) {
   return 'danger'
 }
 
+function esimStatusLabel(status: string) {
+  const labels: Record<string, string> = { pending: '等待领取', claimed: '执行中', running: '执行中', succeeded: '成功', success: '成功', completed: '完成', failed: '失败', error: '错误', disabled: '已停用', enabled: '已启用' }
+  return labels[status] || status
+}
+
+function esimCommandLabel(type: string) {
+  const labels: Record<string, string> = { esim_download_profile: '下载 Profile', esim_enable_profile: '启用 Profile', esim_delete_profile: '删除 Profile' }
+  return labels[type] || type.replaceAll('_', ' ')
+}
+
+function esimTaskLabel(type: string) {
+  const labels: Record<string, string> = { download_profile: '添加 eSIM', esim_enable_profile: '启用 Profile', esim_delete_profile: '删除 Profile' }
+  return labels[type] || type.replaceAll('_', ' ')
+}
+
+function commandOperationTask(command: DeviceCommand): EsimOperationTask {
+  const status = command.status || 'pending'
+  const progress = ['succeeded', 'success', 'completed'].includes(status) ? 100 : status === 'claimed' ? 45 : status === 'failed' ? 0 : 10
+  const stages: Record<string, Record<string, string>> = {
+    esim_enable_profile: { pending: '等待终端领取启用命令', claimed: '终端正在切换并验证 Profile', succeeded: 'Profile 已启用并验证', success: 'Profile 已启用并验证', completed: 'Profile 已启用并验证', failed: command.result || 'Profile 启用失败' },
+    esim_delete_profile: { pending: '等待终端领取删除命令', claimed: '终端正在删除 Profile', succeeded: 'Profile 已删除', success: 'Profile 已删除', completed: 'Profile 已删除', failed: command.result || 'Profile 删除失败' }
+  }
+  return {
+    id: command.id,
+    deviceId: command.deviceId,
+    type: command.type,
+    status,
+    stage: stages[command.type]?.[status] || command.result || '正在执行 Profile 操作',
+    progress,
+    createdAt: command.createdAt
+  }
+}
+
+function clearEsimTaskForm() {
+  esimTaskForm.value = { activationCode: '', smdpAddress: '', confirmationCode: '' }
+  esimQrResult.value = ''
+  esimTaskResult.value = ''
+}
+
 function profileHasActiveCommand(profile: EsimProfile) {
   return commands.value.some((command) =>
     command.deviceId === profile.deviceId &&
@@ -396,11 +481,12 @@ function profileCommandLabel(profile: EsimProfile) {
 }
 
 async function createProfileCommand(profile: EsimProfile, type: string) {
+  if (type === 'esim_delete_profile' && !window.confirm(`确认删除 Profile ${profile.nickname || profile.profileName || profile.iccid}？此操作不可撤销。`)) return
   esimCommandResult.value = ''
   profileCommandBusy.value = { ...profileCommandBusy.value, [profile.id]: true }
   try {
     const command = await api.post<DeviceCommand>('/api/admin/commands', { deviceId: profile.deviceId, type, payload: { profileId: profile.id, iccid: profile.iccid } })
-    commands.value = await api.get<DeviceCommand[]>('/api/admin/commands')
+    commands.value = [command, ...commands.value.filter((item) => item.id !== command.id)]
     audit.value = await api.get<AuditLog[]>('/api/admin/audit')
     esimCommandResult.value = `命令 ${command.id} 已创建，终端执行完成后将自动更新 Profile 状态。`
   } catch (err) {
@@ -692,30 +778,48 @@ function parseActivationCode(value: string) {
   }
 }
 
+async function decodeQrFile(file: File) {
+  if (window.BarcodeDetector) {
+    try {
+      const bitmap = await createImageBitmap(file)
+      try {
+        const detector = new window.BarcodeDetector({ formats: ['qr_code'] })
+        const codes = await detector.detect(bitmap)
+        const value = codes.find((code) => code.rawValue)?.rawValue
+        if (value) return value
+      } finally {
+        bitmap.close()
+      }
+    } catch {
+      // Fall through to ZXing for browsers with partial BarcodeDetector support.
+    }
+  }
+
+  const objectUrl = URL.createObjectURL(file)
+  try {
+    const { BrowserQRCodeReader } = await import('@zxing/browser')
+    const result = await new BrowserQRCodeReader().decodeFromImageUrl(objectUrl)
+    return result.getText()
+  } finally {
+    URL.revokeObjectURL(objectUrl)
+  }
+}
+
 async function readEsimQr(event: Event) {
   esimQrResult.value = ''
   const input = event.target as HTMLInputElement
   const file = input.files?.[0]
   if (!file) return
-  if (!window.BarcodeDetector) {
-    esimQrResult.value = '当前浏览器不支持二维码识别，请手动输入激活码。'
-    input.value = ''
-    return
-  }
   try {
-    const bitmap = await createImageBitmap(file)
-    const detector = new window.BarcodeDetector({ formats: ['qr_code'] })
-    const codes = await detector.detect(bitmap)
-    bitmap.close()
-    const value = codes.find((code) => code.rawValue)?.rawValue || ''
+    const value = await decodeQrFile(file)
     if (!value) {
-      esimQrResult.value = '未识别到二维码内容。'
+      esimQrResult.value = '未识别到二维码内容，请使用清晰、完整的二维码图片。'
       return
     }
     parseActivationCode(value)
     esimQrResult.value = value.toUpperCase().startsWith('LPA:') ? '已识别 eSIM 激活码' : '已识别二维码内容，请确认是否为 eSIM 激活码'
-  } catch (err) {
-    esimQrResult.value = err instanceof Error ? `二维码识别失败：${err.message}` : '二维码识别失败'
+  } catch {
+    esimQrResult.value = '未识别到二维码，请使用清晰、完整的 PNG、JPG 或相机照片。'
   } finally {
     input.value = ''
   }
@@ -732,9 +836,10 @@ onMounted(() => {
   void loadAll()
   refreshTimer = window.setInterval(() => {
     if (!loading.value && !refreshing.value && livePages.has(page.value)) {
-      void loadAll(false)
+      if (page.value === 'esim') void refreshEsimOperations()
+      else void loadAll(false)
     }
-  }, 2000)
+  }, 1000)
 })
 
 onBeforeUnmount(() => {
@@ -760,8 +865,8 @@ onBeforeUnmount(() => {
             <div class="card metric"><span>失败/重试</span><b>{{ sms.items.filter((item) => ['failed', 'retrying'].includes(item.deliveryStatus)).length }}</b><small>当前页分发异常</small></div>
           </div>
           <div class="grid layout-2 top-gap">
-            <div class="card"><div class="card-head toolbar"><input v-model="smsQuery" class="field" placeholder="搜索号码、内容、短信 ID" @keydown.enter="searchSms(1)"><button class="btn" @click="searchSms(1)">搜索</button></div><table><thead><tr><th>接收时间</th><th>终端</th><th>发送者</th><th>内容摘要</th><th>标签</th><th>分发</th></tr></thead><tbody><tr v-for="item in sms.items" :key="item.id" :class="{ selected: selectedSmsId === item.id }" @click="selectedSmsId = item.id"><td>{{ formatTime(item.timestamp) }}</td><td>{{ item.deviceName }}</td><td class="mono">{{ item.sender }}</td><td class="truncate">{{ item.body }}</td><td><span class="status info">{{ item.tag }}</span></td><td><span :class="['status', statusClass(item.deliveryStatus)]">{{ item.deliverySummary }}</span></td></tr></tbody></table><PaginationBar :page="smsPage" :page-size="smsPageSize" :total="sms.total" @change="searchSms" @page-size-change="changeSmsPageSize" /></div>
-            <div class="card detail"><div class="card-head"><b>短信详情</b><button class="btn small" @click="copySelectedSms">复制内容</button></div><template v-if="selectedSms"><dl><dt>短信 ID</dt><dd class="mono">{{ selectedSms.id }}</dd><dt>接收时间</dt><dd>{{ formatTime(selectedSms.timestamp) }}</dd><dt>终端</dt><dd>{{ selectedSms.deviceName }}</dd><dt>发送者</dt><dd class="mono">{{ selectedSms.sender }}</dd><dt>长短信</dt><dd>{{ selectedSms.concatInfo }}</dd></dl><label>完整内容</label><textarea readonly :value="selectedSms.body" /><label>分发记录</label><div class="timeline"><div class="event"><span>状态</span><div><b>{{ selectedSms.deliveryStatus }}</b><small>{{ selectedSms.deliverySummary }}</small></div></div></div><div v-if="smsActionResult" class="alert success">{{ smsActionResult }}</div><div class="toolbar"><button class="btn" @click="openSelectedSmsDevice">打开终端</button></div></template></div>
+            <div class="card"><div class="card-head toolbar"><input v-model="smsQuery" class="field" placeholder="搜索发送方、接收方、内容或短信 ID" @keydown.enter="searchSms(1)"><button class="btn" @click="searchSms(1)">搜索</button></div><table><thead><tr><th>接收时间</th><th>终端</th><th>发送方</th><th>接收方</th><th>内容摘要</th><th>标签</th><th>分发</th></tr></thead><tbody><tr v-for="item in sms.items" :key="item.id" :class="{ selected: selectedSmsId === item.id }" @click="selectedSmsId = item.id"><td>{{ formatTime(item.timestamp) }}</td><td>{{ item.deviceName }}</td><td class="mono">{{ item.sender }}</td><td class="mono">{{ item.recipient || '-' }}</td><td class="truncate">{{ item.body }}</td><td><span class="status info">{{ item.tag }}</span></td><td><span :class="['status', statusClass(item.deliveryStatus)]">{{ item.deliverySummary }}</span></td></tr></tbody></table><PaginationBar :page="smsPage" :page-size="smsPageSize" :total="sms.total" @change="searchSms" @page-size-change="changeSmsPageSize" /></div>
+            <div class="card detail"><div class="card-head"><b>短信详情</b><button class="btn small" @click="copySelectedSms">复制内容</button></div><template v-if="selectedSms"><dl><dt>短信 ID</dt><dd class="mono">{{ selectedSms.id }}</dd><dt>接收时间</dt><dd>{{ formatTime(selectedSms.timestamp) }}</dd><dt>接收终端</dt><dd>{{ selectedSms.deviceName }}</dd><dt>发送方</dt><dd class="mono">{{ selectedSms.sender }}</dd><dt>接收方</dt><dd class="mono">{{ selectedSms.recipient || '号码未上报' }}</dd><dt>长短信</dt><dd>{{ selectedSms.concatInfo }}</dd></dl><label>完整内容</label><textarea readonly :value="selectedSms.body" /><label>分发记录</label><div class="timeline"><div class="event"><span>状态</span><div><b>{{ selectedSms.deliveryStatus }}</b><small>{{ selectedSms.deliverySummary }}</small></div></div></div><div v-if="smsActionResult" class="alert success">{{ smsActionResult }}</div><div class="toolbar"><button class="btn" @click="openSelectedSmsDevice">打开终端</button></div></template></div>
           </div>
         </section>
 
@@ -827,75 +932,63 @@ onBeforeUnmount(() => {
 
         <section v-if="!loading && page === 'esim'" class="page esim-page">
           <div class="page-head">
-            <div><h1>eSIM</h1><p>管理终端 eUICC Profile 与下载任务。</p></div>
-            <button class="btn" @click="loadAll()">刷新</button>
+            <div><h1>eSIM</h1><p>管理终端的 eUICC Profile、下载任务和切换记录。</p></div>
+            <button class="btn" @click="loadAll()">刷新状态</button>
           </div>
 
           <div class="card esim-device-bar">
-            <div class="esim-device-select">
-              <label>终端</label>
-              <select v-model="selectedEsimDeviceId" class="field"><option v-for="device in devices" :key="device.id" :value="device.id">{{ device.name }} / {{ device.status }}</option></select>
-            </div>
+            <div class="esim-device-select"><label>目标终端</label><select v-model="selectedEsimDeviceId" class="field"><option v-for="device in devices" :key="device.id" :value="device.id">{{ device.name }} / {{ device.phoneNumber || '号码未知' }} / {{ device.status === 'online' ? '在线' : '离线' }}</option></select></div>
             <template v-if="selectedEsimDevice">
               <div class="esim-device-stat"><span>状态</span><b><span :class="['status', statusClass(selectedEsimDevice.status)]">{{ selectedEsimDevice.status === 'online' ? '在线' : '离线' }}</span></b></div>
               <div class="esim-device-stat"><span>当前号码</span><b class="mono">{{ selectedEsimDevice.phoneNumber || '-' }}</b></div>
+              <div class="esim-device-stat"><span>运营商</span><b>{{ selectedEsimDevice.operator || '-' }}</b></div>
               <div class="esim-device-stat"><span>信号</span><b><span :class="['status', signalStatusClass(selectedEsimDevice.rssi)]">{{ signalLabel(selectedEsimDevice.rssi) }}<template v-if="selectedEsimDevice.rssi && selectedEsimDevice.rssi < 0"> · {{ selectedEsimDevice.rssi }} dBm</template></span></b></div>
-              <div class="esim-device-stat"><span>当前 ICCID</span><b class="mono">{{ selectedEsimDevice.iccid || '-' }}</b></div>
-              <div class="esim-device-stat esim-device-secondary"><span>运营商</span><b>{{ selectedEsimDevice.operator || '-' }}</b></div>
+              <div class="esim-device-stat esim-device-secondary"><span>当前 ICCID</span><b class="mono">{{ selectedEsimDevice.iccid || '-' }}</b></div>
               <div class="esim-device-stat esim-device-secondary"><span>EID</span><b class="mono">{{ selectedEsimDevice.eid || '-' }}</b></div>
             </template>
           </div>
 
+          <div v-if="!esimCapabilities.profileDownload" class="alert danger top-gap">eSIM Profile 下载仅支持 Linux 服务端或 Docker 部署。当前平台：{{ esimCapabilities.platform || '未知' }}。{{ esimCapabilities.platform === 'windows' ? 'Windows 服务端不支持下载新 Profile。' : esimCapabilities.reason }}</div>
+          <div v-if="selectedEsimDevice?.status !== 'online'" class="alert danger top-gap">终端当前离线，Profile 下载、切换和删除操作暂不可用。</div>
           <div v-if="esimCommandResult" class="alert success top-gap">{{ esimCommandResult }}</div>
+          <div v-if="esimTaskResult" class="alert success top-gap">{{ esimTaskResult }}</div>
 
           <div class="grid esim-workspace top-gap">
-            <div class="card esim-profiles-panel">
-              <div class="card-head">
-                <div><b>Profile</b><small>{{ selectedDeviceProfiles.length }} 个</small></div>
-                <span v-if="selectedEsimDevice" :class="['status', statusClass(selectedEsimDevice.status)]">{{ selectedEsimDevice.status === 'online' ? '可操作' : '终端离线' }}</span>
-              </div>
-              <div v-if="selectedDeviceProfiles.length > 0" class="profile-list">
-                <div v-for="profile in selectedDeviceProfiles" :key="profile.id" :class="['profile-row', { active: profile.state === 'enabled' }]">
+            <section class="card esim-profiles-panel">
+              <div class="card-head"><div><b>Profile</b><small>{{ selectedDeviceProfiles.length }} 个 · {{ activeEsimProfile ? `当前 ${activeEsimProfile.nickname || activeEsimProfile.profileName || activeEsimProfile.provider || activeEsimProfile.iccid}` : '无启用 Profile' }}</small></div><div class="toolbar"><span :class="['status', activeEsimProfile ? 'ok' : 'gray']">{{ activeEsimProfile ? '已启用' : '未启用' }}</span><button class="btn small primary" :disabled="!esimCapabilities.profileDownload || !selectedEsimDevice || selectedEsimDevice.status !== 'online'" @click="showEsimTaskDialog = true">添加 eSIM</button></div></div>
+              <div v-if="selectedDeviceProfiles.length" class="profile-list">
+                <article v-for="profile in selectedDeviceProfiles" :key="profile.id" :class="['profile-row', { active: profile.state === 'enabled' }]">
                   <div class="profile-state-marker"></div>
                   <div class="profile-main">
                     <div class="profile-title"><b>{{ profile.nickname || profile.profileName || profile.provider || '未命名 Profile' }}</b><span :class="['status', statusClass(profile.state)]">{{ profile.state === 'enabled' ? '当前启用' : '已停用' }}</span></div>
-                    <div class="profile-meta"><span>{{ profile.provider || '-' }}</span><span>{{ profile.profileName || '-' }}</span></div>
-                    <div class="profile-identifiers"><span class="mono">ICCID {{ profile.iccid }}</span><span class="mono">AID {{ profile.aid }}</span></div>
+                    <div class="profile-meta"><span>{{ profile.provider || '运营商未知' }}</span><span>{{ profile.country || '地区未知' }}</span><span>{{ profile.profileName || 'Profile 名称未知' }}</span></div>
+                    <div class="profile-identifiers"><span class="mono">ICCID {{ profile.iccid }}</span><span class="mono">AID {{ profile.aid || '-' }}</span></div>
                   </div>
-                  <div class="profile-actions">
-                    <button class="btn small primary" :disabled="profile.state === 'enabled' || profileCommandBusy[profile.id] || profileHasActiveCommand(profile) || selectedEsimDevice?.status !== 'online'" @click="createProfileCommand(profile, 'esim_enable_profile')">{{ profileCommandLabel(profile) }}</button>
-                    <button class="btn small" :disabled="profile.state === 'enabled' || profileCommandBusy[profile.id] || profileHasActiveCommand(profile) || selectedEsimDevice?.status !== 'online'" @click="createProfileCommand(profile, 'esim_delete_profile')">删除</button>
-                  </div>
-                </div>
+                  <div class="profile-actions"><button class="btn small primary" :disabled="profile.state === 'enabled' || profileCommandBusy[profile.id] || profileHasActiveCommand(profile) || selectedEsimDevice?.status !== 'online'" @click="createProfileCommand(profile, 'esim_enable_profile')">{{ profileCommandLabel(profile) }}</button><button class="btn small" :disabled="profile.state === 'enabled' || profileCommandBusy[profile.id] || profileHasActiveCommand(profile) || selectedEsimDevice?.status !== 'online'" @click="createProfileCommand(profile, 'esim_delete_profile')">删除</button></div>
+                </article>
               </div>
-              <div v-else class="empty"><template v-if="selectedDeviceEsimSyncLog"><b>未能读取 eSIM Profile</b><small>{{ selectedDeviceEsimSyncLog.message }}</small><button class="btn small" @click="openDeviceTools(selectedEsimDeviceId)">打开诊断工具</button></template><template v-else>当前终端暂无 eSIM Profile。</template></div>
-            </div>
+              <div v-else class="empty esim-empty"><template v-if="selectedDeviceEsimSyncLog"><b>未能读取 eSIM Profile</b><small>{{ selectedDeviceEsimSyncLog.message }}</small><button class="btn small" @click="openDeviceTools(selectedEsimDeviceId)">打开诊断工具</button></template><template v-else><b>暂无 eSIM Profile</b><small>{{ esimCapabilities.profileDownload ? '上传运营商二维码或输入激活码以下载新 Profile。' : '当前服务端平台不支持下载新 Profile。' }}</small></template></div>
+            </section>
 
-            <form class="card esim-task-form" @submit.prevent="createEsimTask">
-              <div class="card-head"><div><b>添加 eSIM</b><small>{{ selectedEsimDevice?.name || '未选择终端' }}</small></div><button class="btn small" type="button" @click="esimTaskForm.activationCode = ''; esimTaskForm.smdpAddress = ''; esimTaskForm.confirmationCode = ''; esimQrResult = ''">清空</button></div>
-              <div class="esim-form-body">
-                <input ref="esimQrInput" class="visually-hidden" type="file" accept="image/*" @change="readEsimQr">
-                <button class="qr-upload" type="button" @click="esimQrInput?.click()"><b>上传 eSIM 二维码</b><span>{{ esimQrResult || 'PNG、JPG 或相机照片' }}</span></button>
-                <div class="form-section">
-                  <label>激活码</label>
-                  <textarea v-model="esimTaskForm.activationCode" class="activation-code" placeholder="LPA:1$smdp.example.com$MATCHING-ID" @input="parseActivationCode(esimTaskForm.activationCode)" required></textarea>
-                </div>
-                <div class="form-grid-2">
-                  <div class="form-section"><label>SM-DP+ 地址</label><input v-model="esimTaskForm.smdpAddress" class="field" placeholder="smdp.example.com"></div>
-                  <div class="form-section"><label>确认码</label><input v-model="esimTaskForm.confirmationCode" class="field" placeholder="可选"></div>
-                </div>
-                <button class="btn primary esim-submit" :disabled="!selectedEsimDevice || selectedEsimDevice.status !== 'online' || !esimTaskForm.activationCode">创建下载任务</button>
-                <div v-if="esimTaskResult" class="alert success">{{ esimTaskResult }}</div>
+            <aside class="card esim-task-center">
+              <div class="card-head"><div><b>任务中心</b><small>添加、启用和删除 Profile 的实时状态</small></div><div class="esim-task-summary"><span v-if="activeDeviceTasks.length" class="status warn">{{ activeDeviceTasks.length }} 进行中</span><span class="status gray">{{ completedDeviceTasks.length }} 已结束</span></div></div>
+              <div v-if="activeDeviceTasks.length" class="esim-task-list">
+                <article v-for="task in activeDeviceTasks" :key="task.id" class="esim-task-item active"><div><b>{{ esimTaskLabel(task.type) }}</b><span :class="['status', statusClass(task.status)]">{{ esimStatusLabel(task.status) }}</span></div><p>{{ task.stage }}</p><div class="esim-task-value"><span>{{ task.progress }}%</span><small class="mono">{{ task.id }}</small></div><div class="progress"><span :style="{ width: task.progress + '%' }"></span></div></article>
               </div>
-            </form>
+              <div v-else class="empty esim-task-empty"><b>当前没有进行中的任务</b><small>添加、启用或删除 Profile 后，状态会显示在这里。</small></div>
+              <div v-if="completedDeviceTasks.length" class="esim-completed-tasks"><div class="esim-subhead">最近完成</div><div v-for="task in completedDeviceTasks.slice(0, 4)" :key="task.id" class="esim-completed-row"><div><b>{{ esimTaskLabel(task.type) }}</b><small>{{ task.stage }}</small></div><span :class="['status', statusClass(task.status)]">{{ esimStatusLabel(task.status) }}</span></div></div>
+            </aside>
           </div>
 
-          <div class="card top-gap esim-command-panel">
-            <div class="card-head toolbar"><b>终端命令</b><span class="status gray">{{ selectedEsimCommands.length }} 条</span><button class="btn small" @click="loadAll()">刷新</button></div>
-            <table><thead><tr><th>时间</th><th>命令</th><th>状态</th><th>结果</th></tr></thead><tbody><tr v-for="command in pagedEsimCommands" :key="command.id"><td>{{ formatTime(command.createdAt) }}</td><td>{{ command.type }}<small class="mono">{{ command.id }}</small></td><td><span :class="['status', statusClass(command.status)]">{{ command.status }}</span></td><td>{{ command.result || '-' }}</td></tr><tr v-if="selectedEsimCommands.length === 0"><td colspan="4" class="muted">当前终端暂无 eSIM 命令。</td></tr></tbody></table>
+          <section class="card top-gap esim-command-panel">
+            <div class="card-head"><div><b>操作记录</b><small>Profile 下载、启用和删除命令</small></div><span class="status gray">{{ selectedEsimCommands.length }} 条</span></div>
+            <div class="esim-command-table"><table><thead><tr><th>时间</th><th>操作</th><th>状态</th><th>结果</th></tr></thead><tbody><tr v-for="command in pagedEsimCommands" :key="command.id"><td>{{ formatTime(command.createdAt) }}</td><td><b>{{ esimCommandLabel(command.type) }}</b><small class="mono">{{ command.id }}</small></td><td><span :class="['status', statusClass(command.status)]">{{ esimStatusLabel(command.status) }}</span></td><td class="esim-command-result">{{ command.result || '等待终端返回结果' }}</td></tr><tr v-if="selectedEsimCommands.length === 0"><td colspan="4"><div class="empty"><b>暂无 eSIM 操作记录</b><small>下载或切换 Profile 后会显示在这里。</small></div></td></tr></tbody></table></div>
             <PaginationBar v-if="selectedEsimCommands.length" :page="esimCommandPage" :page-size="esimCommandPageSize" :total="selectedEsimCommands.length" @change="esimCommandPage = $event" @page-size-change="esimCommandPageSize = $event" />
+          </section>
+
+          <div v-if="showEsimTaskDialog" class="modal-backdrop" @click.self="showEsimTaskDialog = false">
+            <form class="card esim-task-form esim-task-modal" @submit.prevent="createEsimTask"><div class="card-head"><div><b>添加 eSIM</b><small>{{ selectedEsimDevice?.name || '未选择终端' }}</small></div><button class="btn small" type="button" @click="showEsimTaskDialog = false">关闭</button></div><div class="esim-form-body"><div class="alert">下载由服务端 LPA 通过加密 SM-DP+ 连接完成，期间请保持服务端和终端在线。</div><input ref="esimQrInput" class="visually-hidden" type="file" accept="image/png,image/jpeg,image/webp,image/gif,image/bmp" @change="readEsimQr"><button class="qr-upload" type="button" @click="esimQrInput?.click()"><b>上传 eSIM 二维码</b><span>{{ esimQrResult || '支持 PNG、JPG、WebP 或相机照片' }}</span></button><div class="esim-form-divider"><span>或手动输入</span></div><div class="form-section"><label>激活码</label><textarea v-model="esimTaskForm.activationCode" class="activation-code" placeholder="LPA:1$smdp.example.com$MATCHING-ID" @input="parseActivationCode(esimTaskForm.activationCode)" required></textarea><small>激活码属于敏感信息，页面和日志不会完整展示。</small></div><div class="form-grid-2"><div class="form-section"><label>SM-DP+ 地址</label><input v-model="esimTaskForm.smdpAddress" class="field" placeholder="自动解析或手动输入"></div><div class="form-section"><label>确认码</label><input v-model="esimTaskForm.confirmationCode" class="field" placeholder="可选"></div></div><div class="esim-task-target"><span>目标终端</span><b>{{ selectedEsimDevice?.name }}</b><small class="mono">EID {{ selectedEsimDevice?.eid || '-' }}</small></div><div class="toolbar esim-dialog-actions"><button class="btn" type="button" @click="clearEsimTaskForm">清空</button><button class="btn primary" :disabled="!selectedEsimDevice || selectedEsimDevice.status !== 'online' || !esimTaskForm.activationCode.trim().toUpperCase().startsWith('LPA:1$')">下载 Profile</button></div></div></form>
           </div>
-          <div v-for="task in selectedDeviceTasks" :key="task.id" class="card top-gap esim-task-progress"><div><b>{{ task.type }}</b><p>{{ task.stage }}</p></div><span>{{ task.progress }}%</span><div class="progress"><span :style="{ width: task.progress + '%' }"></span></div></div>
         </section>
 
         <section v-if="!loading && page === 'esim-subscriptions'" class="page">

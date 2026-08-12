@@ -135,7 +135,7 @@ function dateKey(date: Date) {
       </div>
     </div>
     <div class="grid layout-2 top-gap">
-      <div class="card"><div class="card-head"><b>最近短信</b><button class="btn small" @click="emit('openSms')">查看历史</button></div><table><thead><tr><th>时间</th><th>终端</th><th>发送者</th><th>内容</th><th>分发</th></tr></thead><tbody><tr v-for="item in dashboard.recentSms" :key="item.id"><td>{{ formatTime(item.timestamp) }}</td><td>{{ item.deviceName }}</td><td class="mono">{{ item.sender }}</td><td class="truncate">{{ item.body }}</td><td><span :class="['status', statusClass(item.deliveryStatus)]">{{ item.deliverySummary }}</span></td></tr></tbody></table></div>
+      <div class="card"><div class="card-head"><b>最近短信</b><button class="btn small" @click="emit('openSms')">查看历史</button></div><table><thead><tr><th>时间</th><th>终端</th><th>发送方</th><th>接收方</th><th>内容</th><th>分发</th></tr></thead><tbody><tr v-for="item in dashboard.recentSms" :key="item.id"><td>{{ formatTime(item.timestamp) }}</td><td>{{ item.deviceName }}</td><td class="mono">{{ item.sender }}</td><td class="mono">{{ item.recipient || '-' }}</td><td class="truncate">{{ item.body }}</td><td><span :class="['status', statusClass(item.deliveryStatus)]">{{ item.deliverySummary }}</span></td></tr></tbody></table></div>
       <div class="card"><div class="card-head"><b>待处理告警</b></div><div class="timeline"><div v-for="alert in dashboard.alerts" :key="alert.title" class="event"><span>{{ alert.time }}</span><div><b>{{ alert.title }}</b><small>{{ alert.message }}</small></div></div><div v-if="dashboard.alerts.length === 0" class="empty muted">暂无待处理告警。</div></div></div>
     </div>
   </section>

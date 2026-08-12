@@ -31,6 +31,7 @@ type SMSMessage struct {
 	DeviceID          string    `json:"deviceId"`
 	DeviceName        string    `json:"deviceName"`
 	Sender            string    `json:"sender"`
+	Recipient         string    `json:"recipient"`
 	Body              string    `json:"body"`
 	Timestamp         time.Time `json:"timestamp"`
 	Tag               string    `json:"tag"`
@@ -130,6 +131,7 @@ type EsimProfile struct {
 type EsimTask struct {
 	ID       string `json:"id"`
 	DeviceID string `json:"deviceId"`
+	AuditID  string `json:"auditId,omitempty"`
 	Type     string `json:"type"`
 	Status   string `json:"status"`
 	Stage    string `json:"stage"`
@@ -316,6 +318,7 @@ type TerminalSMSRequest struct {
 	DeviceID          string    `json:"deviceId"`
 	TerminalMessageID string    `json:"terminalMessageId"`
 	Sender            string    `json:"sender"`
+	Recipient         string    `json:"recipient"`
 	Body              string    `json:"body"`
 	Timestamp         time.Time `json:"timestamp"`
 	ConcatInfo        string    `json:"concatInfo"`

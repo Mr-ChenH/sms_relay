@@ -1,6 +1,8 @@
 services:
   api:
-    image: golang:1.25
+    build:
+      context: api
+      dockerfile: Dockerfile
     working_dir: /app/server/api
     command: go run ./cmd/smshub
     environment:
@@ -9,6 +11,7 @@ services:
       SMS_HUB_DB_PATH: "../data/smshub.db"
       SMS_HUB_PUBLIC_BASE_URL: "${SMS_HUB_PUBLIC_BASE_URL:-http://192.168.1.10:8080}"
       SMS_HUB_PUBLIC_MQTT_BROKER: "${SMS_HUB_PUBLIC_MQTT_BROKER:-mqtt://192.168.1.10:1883}"
+      LPAC_PATH: "/usr/local/bin/lpac"
     ports:
       - "8080:8080"
       - "1883:1883"
