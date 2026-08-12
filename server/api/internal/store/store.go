@@ -754,7 +754,7 @@ func (s *Store) CreateEsimTask(req model.CreateEsimTaskRequest) (model.EsimTask,
 		CreatedAt: time.Now(),
 	}
 	s.commands = append(s.commands, cmd)
-	s.audit = append([]model.AuditLog{{ID: s.nextIDStringLocked("audit"), Actor: "admin", DeviceName: device.Name, Action: "esim_download_profile", ParameterSummary: maskActivationCode(activationCode), Result: "pending", CreatedAt: time.Now()}}, s.audit...)
+	s.audit = append([]model.AuditLog{{ID: s.nextIDStringLocked("audit"), CommandID: cmd.ID, Actor: "admin", DeviceName: device.Name, Action: "esim_download_profile", ParameterSummary: maskActivationCode(activationCode), Result: "pending", CreatedAt: time.Now()}}, s.audit...)
 	s.notifyCommandCreatedLocked(cmd, device)
 	return task, nil
 }
@@ -1034,7 +1034,7 @@ func (s *Store) MarkKeepaliveRunNotified(id string) {
 func (s *Store) createKeepaliveCommandLocked(device model.Device, commandType string, payload map[string]interface{}) model.DeviceCommand {
 	cmd := model.DeviceCommand{ID: s.nextIDStringLocked("cmd"), DeviceID: device.ID, Type: commandType, Payload: payload, Status: "pending", CreatedAt: time.Now()}
 	s.commands = append(s.commands, cmd)
-	s.audit = append([]model.AuditLog{{ID: s.nextIDStringLocked("audit"), Actor: "subscription", DeviceName: device.Name, Action: commandType, ParameterSummary: summarizePayload(payload), Result: "pending", CreatedAt: time.Now()}}, s.audit...)
+	s.audit = append([]model.AuditLog{{ID: s.nextIDStringLocked("audit"), CommandID: cmd.ID, Actor: "subscription", DeviceName: device.Name, Action: commandType, ParameterSummary: summarizePayload(payload), Result: "pending", CreatedAt: time.Now()}}, s.audit...)
 	s.notifyCommandCreatedLocked(cmd, device)
 	return cmd
 }
@@ -1117,7 +1117,65 @@ func (s *Store) Logs() []model.LogEntry {
 func (s *Store) Audit() []model.AuditLog {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return append([]model.AuditLog{}, s.audit...)
+
+	// Older persisted audit rows predate CommandID. Resolve those rows against
+	// the corresponding command so completed work no longer appears pending.
+	rows := append([]model.AuditLog{}, s.audit...)
+	for i := range rows {
+		if rows[i].Result != "pending" && rows[i].Result != "claimed" {
+			continue
+		}
+		if command, ok := s.auditCommandLocked(rows[i]); ok {
+			rows[i].CommandID = command.ID
+			rows[i].Result = command.Status
+		}
+	}
+	return rows
+}
+
+func (s *Store) auditCommandLocked(audit model.AuditLog) (model.DeviceCommand, bool) {
+	if audit.CommandID != "" {
+		return s.findCommandLocked(audit.CommandID)
+	}
+	for _, command := range s.commands {
+		device, ok := s.findDeviceLocked(command.DeviceID)
+		if !ok || device.Name != audit.DeviceName || command.Type != audit.Action {
+			continue
+		}
+		if command.CreatedAt.Sub(audit.CreatedAt) < -time.Second || command.CreatedAt.Sub(audit.CreatedAt) > time.Second {
+			continue
+		}
+		return command, true
+	}
+	return model.DeviceCommand{}, false
+}
+
+func (s *Store) updateCommandAuditLocked(commandID, status string) {
+	for i := range s.audit {
+		if s.audit[i].CommandID == commandID {
+			s.audit[i].Result = status
+			return
+		}
+	}
+	command, ok := s.findCommandLocked(commandID)
+	if !ok {
+		return
+	}
+	for i := range s.audit {
+		if s.audit[i].CommandID != "" || s.audit[i].Action != command.Type || (s.audit[i].Result != "pending" && s.audit[i].Result != "claimed") {
+			continue
+		}
+		device, found := s.findDeviceLocked(command.DeviceID)
+		if !found || s.audit[i].DeviceName != device.Name {
+			continue
+		}
+		if command.CreatedAt.Sub(s.audit[i].CreatedAt) < -time.Second || command.CreatedAt.Sub(s.audit[i].CreatedAt) > time.Second {
+			continue
+		}
+		s.audit[i].CommandID = commandID
+		s.audit[i].Result = status
+		return
+	}
 }
 
 func (s *Store) Commands() []model.DeviceCommand {
@@ -1148,7 +1206,7 @@ func (s *Store) CreateDeviceCommand(req model.CreateDeviceCommandRequest) (model
 	}
 	cmd := model.DeviceCommand{ID: s.nextIDStringLocked("cmd"), DeviceID: device.ID, Type: cmdType, Payload: payload, Status: "pending", CreatedAt: time.Now()}
 	s.commands = append(s.commands, cmd)
-	s.audit = append([]model.AuditLog{{ID: s.nextIDStringLocked("audit"), Actor: "admin", DeviceName: device.Name, Action: cmdType, ParameterSummary: summarizePayload(payload), Result: "pending", CreatedAt: time.Now()}}, s.audit...)
+	s.audit = append([]model.AuditLog{{ID: s.nextIDStringLocked("audit"), CommandID: cmd.ID, Actor: "admin", DeviceName: device.Name, Action: cmdType, ParameterSummary: summarizePayload(payload), Result: "pending", CreatedAt: time.Now()}}, s.audit...)
 	s.notifyCommandCreatedLocked(cmd, device)
 	return cmd, nil
 }
@@ -1171,7 +1229,7 @@ func (s *Store) CreateSendSMSTask(req model.SendSMSRequest) (model.CommandResult
 		CreatedAt: time.Now(),
 	}
 	s.commands = append(s.commands, cmd)
-	s.audit = append([]model.AuditLog{{ID: s.nextIDStringLocked("audit"), Actor: "admin", DeviceName: device.Name, Action: "send_sms", ParameterSummary: maskPhone(req.Phone), Result: "pending", CreatedAt: time.Now()}}, s.audit...)
+	s.audit = append([]model.AuditLog{{ID: s.nextIDStringLocked("audit"), CommandID: cmd.ID, Actor: "admin", DeviceName: device.Name, Action: "send_sms", ParameterSummary: maskPhone(req.Phone), Result: "pending", CreatedAt: time.Now()}}, s.audit...)
 	s.notifyCommandCreatedLocked(cmd, device)
 	return model.CommandResult{CommandID: cmd.ID, Status: cmd.Status, Message: "发送短信任务已创建，等待终端领取"}, nil
 }
@@ -1319,6 +1377,7 @@ func (s *Store) CompleteCommand(commandID string, req model.TerminalCommandResul
 			s.commands[i].Status = firstNonEmpty(req.Status, "succeeded")
 			s.commands[i].Result = req.Result
 			s.commands[i].CompletedAt = &now
+			s.updateCommandAuditLocked(commandID, s.commands[i].Status)
 			return s.commands[i], nil
 		}
 	}
@@ -1370,6 +1429,7 @@ func (s *Store) reconcileProfileCommandsLocked(device model.Device, now time.Tim
 			cmd.Status = "succeeded"
 			cmd.Result = "profile enabled and verified by heartbeat"
 			cmd.CompletedAt = &now
+			s.updateCommandAuditLocked(cmd.ID, cmd.Status)
 			changed = true
 		}
 	}

@@ -2,11 +2,13 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { api } from './api'
 import AppShell from './components/AppShell.vue'
+import PaginationBar from './components/PaginationBar.vue'
 import AuditPage from './pages/AuditPage.vue'
 import DevicesPage from './pages/DevicesPage.vue'
 import LogsPage from './pages/LogsPage.vue'
 import OverviewPage from './pages/OverviewPage.vue'
 import SendSmsPage from './pages/SendSmsPage.vue'
+import ToolsPage from './pages/ToolsPage.vue'
 import type { AppriseService, AppriseTarget, AuditLog, CommandResult, CreateAppriseServiceRequest, CreateAppriseTargetRequest, CreateDeviceCommandRequest, CreateEsimSubscriptionRequest, CreateEsimTaskRequest, CreateRoutingRuleRequest, Dashboard, Device, DeviceCommand, EsimProfile, EsimSubscription, EsimTask, LogEntry, RoutingRule, SMSList, SMSMessage, Page } from './types'
 import { formatTime, statusClass } from './utils/ui'
 
@@ -84,12 +86,15 @@ const profileCommandBusy = ref<Record<string, boolean>>({})
 const toolDeviceId = ref('')
 const toolATCommand = ref('AT+CSQ')
 const toolResult = ref('')
+const activeToolCommandId = ref('')
 const esimQrResult = ref('')
 const esimQrInput = ref<HTMLInputElement | null>(null)
 const sendResult = ref<CommandResult | null>(null)
 const showEsimSubscriptionDialog = ref(false)
 const editingEsimSubscriptionId = ref('')
 const showAppriseForm = ref(false)
+const showAppriseServiceForm = ref(false)
+const showRoutingRuleForm = ref(false)
 const editingAppriseTargetId = ref('')
 const appriseForm = ref({
   serviceId: '',
@@ -276,12 +281,9 @@ async function searchSms(pageNumber = 1) {
   selectedSmsId.value = sms.value.items[0]?.id || ''
 }
 
-async function changeSmsPage(delta: number) {
-  if (!sms.value) return
-  const nextPage = smsPage.value + delta
-  const maxPage = Math.max(1, Math.ceil(sms.value.total / smsPageSize.value))
-  if (nextPage < 1 || nextPage > maxPage) return
-  await searchSms(nextPage)
+async function changeSmsPageSize(pageSize: number) {
+  smsPageSize.value = pageSize
+  await searchSms(1)
 }
 
 async function runGlobalSearch() {
@@ -347,11 +349,13 @@ async function createDeviceCommand(payload: CreateDeviceCommandRequest, successM
   commands.value = await api.get<DeviceCommand[]>('/api/admin/commands')
   audit.value = await api.get<AuditLog[]>('/api/admin/audit')
   toolResult.value = `${successMessage}：${command.id}`
+  return command
 }
 
 async function runDiagnosticCommand(type: string, payload: Record<string, unknown> = {}) {
   toolResult.value = ''
-  await createDeviceCommand({ deviceId: toolDeviceId.value, type, payload }, '已创建诊断命令')
+  const command = await createDeviceCommand({ deviceId: toolDeviceId.value, type, payload }, '已创建诊断命令')
+  activeToolCommandId.value = command.id
 }
 
 function profileOptionLabel(profile: EsimProfile) {
@@ -499,11 +503,13 @@ async function saveAppriseService() {
 function editAppriseService(service: AppriseService) {
   editingAppriseServiceId.value = service.id
   appriseServiceForm.value = { name: service.name, baseUrl: service.baseUrl, enabled: service.enabled }
+  showAppriseServiceForm.value = true
 }
 
 function resetAppriseServiceForm() {
   editingAppriseServiceId.value = ''
   appriseServiceForm.value = { name: '备用 Apprise API', baseUrl: 'http://localhost:8000', enabled: true }
+  showAppriseServiceForm.value = false
 }
 
 async function deleteAppriseService(service: AppriseService) {
@@ -558,11 +564,13 @@ function editRoutingRule(rule: RoutingRule) {
     targetIds: rule.targetIds || [],
     enabled: rule.enabled
   }
+  showRoutingRuleForm.value = true
 }
 
 function resetRoutingRuleForm() {
   editingRoutingRuleId.value = ''
   routingRuleForm.value = { name: '', senderContains: '', bodyKeywordsText: '', deviceIds: [], tagsText: '', targetIds: [], enabled: true }
+  showRoutingRuleForm.value = false
 }
 
 function routingRuleConditions(rule: RoutingRule) {
@@ -713,7 +721,7 @@ async function readEsimQr(event: Event) {
   }
 }
 
-const livePages = new Set<Page>(['overview', 'devices', 'send', 'esim', 'tools'])
+const livePages = new Set<Page>(['overview', 'devices', 'send', 'esim', 'tools', 'logs', 'audit'])
 let refreshTimer: number | undefined
 
 watch(page, () => {
@@ -752,78 +760,69 @@ onBeforeUnmount(() => {
             <div class="card metric"><span>失败/重试</span><b>{{ sms.items.filter((item) => ['failed', 'retrying'].includes(item.deliveryStatus)).length }}</b><small>当前页分发异常</small></div>
           </div>
           <div class="grid layout-2 top-gap">
-            <div class="card"><div class="card-head toolbar"><input v-model="smsQuery" class="field" placeholder="搜索号码、内容、短信 ID" @keydown.enter="searchSms(1)"><select v-model.number="smsPageSize" class="select" @change="searchSms(1)"><option :value="10">每页 10 条</option><option :value="20">每页 20 条</option><option :value="50">每页 50 条</option></select><button class="btn" @click="searchSms(1)">搜索</button></div><table><thead><tr><th>接收时间</th><th>终端</th><th>发送者</th><th>内容摘要</th><th>标签</th><th>分发</th></tr></thead><tbody><tr v-for="item in sms.items" :key="item.id" :class="{ selected: selectedSmsId === item.id }" @click="selectedSmsId = item.id"><td>{{ formatTime(item.timestamp) }}</td><td>{{ item.deviceName }}</td><td class="mono">{{ item.sender }}</td><td class="truncate">{{ item.body }}</td><td><span class="status info">{{ item.tag }}</span></td><td><span :class="['status', statusClass(item.deliveryStatus)]">{{ item.deliverySummary }}</span></td></tr></tbody></table><div class="pager">第 {{ smsPage }} 页，共 {{ Math.max(1, Math.ceil(sms.total / smsPageSize)) }} 页；当前 {{ sms.items.length }} 条，共 {{ sms.total.toLocaleString() }} 条 <button class="btn small" :disabled="smsPage <= 1" @click="changeSmsPage(-1)">上一页</button><button class="btn small primary" disabled>{{ smsPage }}</button><button class="btn small" :disabled="smsPage >= Math.max(1, Math.ceil(sms.total / smsPageSize))" @click="changeSmsPage(1)">下一页</button></div></div>
+            <div class="card"><div class="card-head toolbar"><input v-model="smsQuery" class="field" placeholder="搜索号码、内容、短信 ID" @keydown.enter="searchSms(1)"><button class="btn" @click="searchSms(1)">搜索</button></div><table><thead><tr><th>接收时间</th><th>终端</th><th>发送者</th><th>内容摘要</th><th>标签</th><th>分发</th></tr></thead><tbody><tr v-for="item in sms.items" :key="item.id" :class="{ selected: selectedSmsId === item.id }" @click="selectedSmsId = item.id"><td>{{ formatTime(item.timestamp) }}</td><td>{{ item.deviceName }}</td><td class="mono">{{ item.sender }}</td><td class="truncate">{{ item.body }}</td><td><span class="status info">{{ item.tag }}</span></td><td><span :class="['status', statusClass(item.deliveryStatus)]">{{ item.deliverySummary }}</span></td></tr></tbody></table><PaginationBar :page="smsPage" :page-size="smsPageSize" :total="sms.total" @change="searchSms" @page-size-change="changeSmsPageSize" /></div>
             <div class="card detail"><div class="card-head"><b>短信详情</b><button class="btn small" @click="copySelectedSms">复制内容</button></div><template v-if="selectedSms"><dl><dt>短信 ID</dt><dd class="mono">{{ selectedSms.id }}</dd><dt>接收时间</dt><dd>{{ formatTime(selectedSms.timestamp) }}</dd><dt>终端</dt><dd>{{ selectedSms.deviceName }}</dd><dt>发送者</dt><dd class="mono">{{ selectedSms.sender }}</dd><dt>长短信</dt><dd>{{ selectedSms.concatInfo }}</dd></dl><label>完整内容</label><textarea readonly :value="selectedSms.body" /><label>分发记录</label><div class="timeline"><div class="event"><span>状态</span><div><b>{{ selectedSms.deliveryStatus }}</b><small>{{ selectedSms.deliverySummary }}</small></div></div></div><div v-if="smsActionResult" class="alert success">{{ smsActionResult }}</div><div class="toolbar"><button class="btn" @click="openSelectedSmsDevice">打开终端</button></div></template></div>
           </div>
         </section>
 
         <SendSmsPage v-if="!loading && page === 'send'" v-model:send-form="sendForm" :devices="devices" :send-result="sendResult" @create-send-task="createSendTask" />
 
-        <section v-if="!loading && page === 'routes'" class="page">
+        <section v-if="!loading && page === 'routes'" class="page routes-page">
           <div class="page-head">
-            <div><h1>消息分发</h1><p>先配置自部署 Apprise API 服务，再配置 target 的 config key、tag 和模板。</p></div>
-            <button class="btn primary" @click="showAppriseForm = !showAppriseForm">{{ showAppriseForm ? '收起表单' : '新增 Apprise Target' }}</button>
+            <div><h1>消息分发</h1><p>管理 Apprise 服务、通知 Target 和短信路由规则。</p></div>
+            <div class="toolbar"><button class="btn" @click="showAppriseForm = true">新增 Target</button><button class="btn primary" @click="showRoutingRuleForm = true">新增规则</button></div>
           </div>
-          <form class="card form top-gap" @submit.prevent="saveAppriseService">
-            <h2>{{ editingAppriseServiceId ? '编辑 Apprise 服务' : '新增 Apprise 服务' }}</h2>
-            <label>服务名称</label>
-            <input v-model="appriseServiceForm.name" class="field" placeholder="例如：主 Apprise API" required>
-            <label>Apprise API 地址</label>
-            <input v-model="appriseServiceForm.baseUrl" class="field" placeholder="http://localhost:8000" required>
-            <label class="checkbox-row"><input v-model="appriseServiceForm.enabled" type="checkbox"> 启用通知分发</label>
-            <div class="toolbar"><button class="btn primary">{{ editingAppriseServiceId ? '保存修改' : '添加服务' }}</button><button v-if="editingAppriseServiceId" class="btn" type="button" @click="resetAppriseServiceForm">取消</button></div>
-          </form>
+
+          <div class="grid cols-3 routes-metrics">
+            <div class="card metric"><span>Apprise 服务</span><b>{{ appriseServices.filter((item) => item.enabled).length }} / {{ appriseServices.length }}</b><small>已启用 / 全部</small></div>
+            <div class="card metric"><span>通知 Target</span><b>{{ channels.filter((item) => item.enabled).length }} / {{ channels.length }}</b><small>已启用 / 全部</small></div>
+            <div class="card metric"><span>路由规则</span><b>{{ rules.filter((item) => item.enabled).length }} / {{ rules.length }}</b><small>已启用 / 全部</small></div>
+          </div>
+
           <div v-if="appriseServiceResult" class="alert success top-gap">{{ appriseServiceResult }}</div>
-          <div class="grid cols-3 top-gap">
-            <div v-for="service in appriseServices" :key="service.id" class="card channel">
-              <div><b>{{ service.name }}</b><small>{{ service.baseUrl }}</small></div>
-              <span :class="['status', service.lastStatus === 'success' ? 'ok' : service.lastStatus === 'failed' ? 'danger' : service.enabled ? 'gray' : 'gray']">{{ service.enabled ? service.lastStatus : 'disabled' }}</span>
-              <small>{{ service.lastMessage }}</small>
-              <div class="toolbar"><button class="btn small" type="button" @click="testAppriseService(service.id)">测试连接</button><button class="btn small primary" type="button" @click="editAppriseService(service)">编辑</button><button class="btn small danger" type="button" @click="deleteAppriseService(service)">删除</button></div>
-            </div>
-          </div>
-          <form v-if="showAppriseForm" class="card form top-gap" @submit.prevent="createAppriseTarget">
-            <h2>{{ editingAppriseTargetId ? '编辑 Apprise Target' : '新增 Apprise Target' }}</h2>
-            <label>Apprise 服务</label>
-            <select v-model="appriseForm.serviceId" class="field" required><option v-for="service in appriseServices" :key="service.id" :value="service.id">{{ service.name }} / {{ service.baseUrl }}</option></select>
-            <label>名称</label>
-            <input v-model="appriseForm.name" class="field" placeholder="例如：Telegram 运维群" required>
-            <label>Apprise Config Key</label>
-            <input v-model="appriseForm.configKey" class="field" placeholder="default" required>
-            <label>Tags（逗号分隔）</label>
-            <input v-model="appriseForm.tagsText" class="field" placeholder="all,verification">
-            <label>标题模板</label>
-            <input v-model="appriseForm.titleTemplate" class="field" placeholder="短信来自 {{sender}}">
-            <label>内容模板</label>
-            <textarea v-model="appriseForm.bodyTemplate" placeholder="{{body}}"></textarea>
-            <label class="checkbox-row"><input v-model="appriseForm.enabled" type="checkbox"> 启用</label>
-            <div class="toolbar"><button class="btn primary">{{ editingAppriseTargetId ? '保存修改' : '保存 Target' }}</button><button class="btn" type="button" @click="resetAppriseTargetForm">取消</button></div>
-          </form>
           <div v-if="appriseSaveResult" class="alert success top-gap">{{ appriseSaveResult }}</div>
-          <div class="grid cols-3 top-gap"><div v-for="ch in channels" :key="ch.id" class="card channel"><div><b>{{ ch.name }}</b><small>{{ ch.serviceName }} / key={{ ch.configKey }} / tags={{ ch.tags.join(',') || 'all' }}</small></div><span :class="['status', ch.lastStatus === 'success' ? 'ok' : ch.enabled ? 'danger' : 'gray']">{{ ch.description }}</span><div class="toolbar"><button class="btn small" @click="testAppriseTarget(ch)">测试</button><button class="btn small primary" @click="editAppriseTarget(ch)">编辑</button><button class="btn small danger" @click="deleteAppriseTarget(ch)">删除</button></div></div></div>
-          <form class="card form top-gap" @submit.prevent="saveRoutingRule">
-            <h2>{{ editingRoutingRuleId ? '编辑路由规则' : '新增路由规则' }}</h2>
-            <label>规则名称</label>
-            <input v-model="routingRuleForm.name" class="field" placeholder="例如：验证码优先" required>
-            <label>发送者包含</label>
-            <input v-model="routingRuleForm.senderContains" class="field" placeholder="例如：95588；留空表示不限">
-            <label>正文关键词（逗号分隔，匹配任意一个）</label>
-            <input v-model="routingRuleForm.bodyKeywordsText" class="field" placeholder="验证码, code">
-            <label>终端（不选择表示不限）</label>
-            <select v-model="routingRuleForm.deviceIds" class="field" multiple>
-              <option v-for="device in devices" :key="device.id" :value="device.id">{{ device.name }}</option>
-            </select>
-            <label>短信标签（逗号分隔）</label>
-            <input v-model="routingRuleForm.tagsText" class="field" placeholder="verification, finance">
-            <label>发送到 Target（可多选）</label>
-            <select v-model="routingRuleForm.targetIds" class="field" multiple required>
-              <option v-for="target in channels" :key="target.id" :value="target.id" :disabled="!target.enabled">{{ target.name }}{{ target.enabled ? '' : '（已停用）' }}</option>
-            </select>
-            <label class="checkbox-row"><input v-model="routingRuleForm.enabled" type="checkbox"> 启用规则</label>
-            <div class="toolbar"><button class="btn primary">{{ editingRoutingRuleId ? '保存修改' : '保存规则' }}</button><button v-if="editingRoutingRuleId" class="btn" type="button" @click="resetRoutingRuleForm">取消</button></div>
-          </form>
           <div v-if="routingRuleResult" class="alert success top-gap">{{ routingRuleResult }}</div>
-          <div class="card top-gap"><table><thead><tr><th>规则</th><th>条件（字段间同时满足）</th><th>发送到</th><th>状态</th><th>操作</th></tr></thead><tbody><tr v-for="rule in rules" :key="rule.id"><td>{{ rule.name }}</td><td>{{ routingRuleConditions(rule) }}</td><td>{{ routingRuleTargets(rule) }}</td><td><span :class="['status', rule.enabled ? 'ok' : 'gray']">{{ rule.enabled ? '启用' : '停用' }}</span></td><td><button class="btn small primary" @click="editRoutingRule(rule)">编辑</button><button class="btn small danger" @click="deleteRoutingRule(rule)">删除</button></td></tr><tr v-if="rules.length === 0"><td colspan="5" class="muted">暂无启用规则时，短信会发送到全部已启用 Target。</td></tr></tbody></table></div>
+
+          <div class="grid routes-config-grid top-gap">
+            <section class="card routes-panel">
+              <div class="card-head"><div><b>Apprise 服务</b><small>通知网关连接</small></div><button class="btn small" type="button" @click="showAppriseServiceForm = true">新增服务</button></div>
+              <div v-if="appriseServices.length" class="routes-item-list">
+                <div v-for="service in appriseServices" :key="service.id" class="routes-item">
+                  <div class="routes-item-main"><div class="routes-item-title"><b>{{ service.name }}</b><span :class="['status', service.lastStatus === 'success' ? 'ok' : service.lastStatus === 'failed' ? 'danger' : 'gray']">{{ service.enabled ? service.lastStatus : 'disabled' }}</span></div><small class="mono">{{ service.baseUrl }}</small><small>{{ service.lastMessage || '尚未测试连接' }}</small></div>
+                  <div class="routes-item-actions"><button class="btn small" type="button" @click="testAppriseService(service.id)">测试</button><button class="btn small" type="button" @click="editAppriseService(service)">编辑</button><button class="btn small danger" type="button" @click="deleteAppriseService(service)">删除</button></div>
+                </div>
+              </div>
+              <div v-else class="empty"><b>暂无 Apprise 服务</b><small>添加服务后才能创建并测试通知 Target。</small></div>
+            </section>
+
+            <section class="card routes-panel">
+              <div class="card-head"><div><b>通知 Target</b><small>具体接收渠道与模板</small></div><button class="btn small" type="button" :disabled="appriseServices.length === 0" @click="showAppriseForm = true">新增 Target</button></div>
+              <div v-if="channels.length" class="routes-item-list">
+                <div v-for="ch in channels" :key="ch.id" class="routes-item">
+                  <div class="routes-item-main"><div class="routes-item-title"><b>{{ ch.name }}</b><span :class="['status', ch.lastStatus === 'success' ? 'ok' : ch.enabled ? 'warn' : 'gray']">{{ ch.enabled ? ch.lastStatus : 'disabled' }}</span></div><small>{{ ch.serviceName }} · key={{ ch.configKey }}</small><div class="tag-list"><span v-for="tag in ch.tags.length ? ch.tags : ['all']" :key="tag">{{ tag }}</span></div><small>{{ ch.description }}</small></div>
+                  <div class="routes-item-actions"><button class="btn small" type="button" @click="testAppriseTarget(ch)">测试</button><button class="btn small" type="button" @click="editAppriseTarget(ch)">编辑</button><button class="btn small danger" type="button" @click="deleteAppriseTarget(ch)">删除</button></div>
+                </div>
+              </div>
+              <div v-else class="empty"><b>暂无通知 Target</b><small>Target 用于关联 Apprise Config Key、标签和消息模板。</small></div>
+            </section>
+          </div>
+
+          <section class="card routes-rules-panel top-gap">
+            <div class="card-head"><div><b>短信路由规则</b><small>规则内条件同时满足；多条规则可分别触发</small></div><button class="btn small primary" type="button" :disabled="channels.length === 0" @click="showRoutingRuleForm = true">新增规则</button></div>
+            <div class="routes-table-wrap"><table><thead><tr><th>规则</th><th>匹配条件</th><th>发送到</th><th>状态</th><th>操作</th></tr></thead><tbody><tr v-for="rule in rules" :key="rule.id"><td><b>{{ rule.name }}</b></td><td class="routes-condition">{{ routingRuleConditions(rule) }}</td><td>{{ routingRuleTargets(rule) }}</td><td><span :class="['status', rule.enabled ? 'ok' : 'gray']">{{ rule.enabled ? '启用' : '停用' }}</span></td><td><div class="toolbar"><button class="btn small" @click="editRoutingRule(rule)">编辑</button><button class="btn small danger" @click="deleteRoutingRule(rule)">删除</button></div></td></tr><tr v-if="rules.length === 0"><td colspan="5"><div class="empty"><b>暂无路由规则</b><small>没有规则时，短信会发送到全部已启用 Target。</small></div></td></tr></tbody></table></div>
+          </section>
+
+          <div v-if="showAppriseServiceForm" class="modal-backdrop" @click.self="resetAppriseServiceForm">
+            <form class="card form modal" @submit.prevent="saveAppriseService"><div class="card-head"><div><b>{{ editingAppriseServiceId ? '编辑 Apprise 服务' : '新增 Apprise 服务' }}</b><small>配置自部署 Apprise API 地址</small></div><button class="btn small" type="button" @click="resetAppriseServiceForm">关闭</button></div><label>服务名称</label><input v-model="appriseServiceForm.name" class="field" placeholder="例如：主 Apprise API" required><label>Apprise API 地址</label><input v-model="appriseServiceForm.baseUrl" class="field" type="url" placeholder="http://localhost:8000" required><label class="checkbox-row"><input v-model="appriseServiceForm.enabled" type="checkbox"> 启用通知分发</label><div class="toolbar"><button class="btn primary">{{ editingAppriseServiceId ? '保存修改' : '添加服务' }}</button><button class="btn" type="button" @click="resetAppriseServiceForm">取消</button></div></form>
+          </div>
+
+          <div v-if="showAppriseForm" class="modal-backdrop" @click.self="resetAppriseTargetForm">
+            <form class="card form modal routes-target-modal" @submit.prevent="createAppriseTarget"><div class="card-head"><div><b>{{ editingAppriseTargetId ? '编辑 Apprise Target' : '新增 Apprise Target' }}</b><small>配置接收渠道与短信模板</small></div><button class="btn small" type="button" @click="resetAppriseTargetForm">关闭</button></div><div class="form-grid-2"><div class="form-section"><label>Apprise 服务</label><select v-model="appriseForm.serviceId" class="field" required><option v-for="service in appriseServices" :key="service.id" :value="service.id">{{ service.name }} / {{ service.baseUrl }}</option></select></div><div class="form-section"><label>名称</label><input v-model="appriseForm.name" class="field" placeholder="例如：Telegram 运维群" required></div><div class="form-section"><label>Config Key</label><input v-model="appriseForm.configKey" class="field" placeholder="default" required></div><div class="form-section"><label>Tags（逗号分隔）</label><input v-model="appriseForm.tagsText" class="field" placeholder="all,verification"></div></div><label>标题模板</label><input v-model="appriseForm.titleTemplate" class="field" placeholder="短信来自 {{sender}}"><label>内容模板</label><textarea v-model="appriseForm.bodyTemplate" placeholder="{{body}}"></textarea><small v-pre>可用变量：{{sender}}、{{body}}、{{device}}、{{timestamp}}</small><label class="checkbox-row"><input v-model="appriseForm.enabled" type="checkbox"> 启用 Target</label><div class="toolbar"><button class="btn primary">{{ editingAppriseTargetId ? '保存修改' : '保存 Target' }}</button><button class="btn" type="button" @click="resetAppriseTargetForm">取消</button></div></form>
+          </div>
+
+          <div v-if="showRoutingRuleForm" class="modal-backdrop" @click.self="resetRoutingRuleForm">
+            <form class="card form modal routes-rule-modal" @submit.prevent="saveRoutingRule"><div class="card-head"><div><b>{{ editingRoutingRuleId ? '编辑路由规则' : '新增路由规则' }}</b><small>同一规则中的非空条件必须同时满足</small></div><button class="btn small" type="button" @click="resetRoutingRuleForm">关闭</button></div><label>规则名称</label><input v-model="routingRuleForm.name" class="field" placeholder="例如：验证码优先" required><div class="form-grid-2"><div class="form-section"><label>发送者包含</label><input v-model="routingRuleForm.senderContains" class="field" placeholder="例如：95588；留空表示不限"></div><div class="form-section"><label>正文关键词（匹配任意一个）</label><input v-model="routingRuleForm.bodyKeywordsText" class="field" placeholder="验证码, code"></div><div class="form-section"><label>终端（不选择表示不限）</label><select v-model="routingRuleForm.deviceIds" class="field routes-multi-select" multiple><option v-for="device in devices" :key="device.id" :value="device.id">{{ device.name }} / {{ device.phoneNumber || '号码未知' }}</option></select></div><div class="form-section"><label>发送到 Target（可多选）</label><select v-model="routingRuleForm.targetIds" class="field routes-multi-select" multiple required><option v-for="target in channels" :key="target.id" :value="target.id" :disabled="!target.enabled">{{ target.name }}{{ target.enabled ? '' : '（已停用）' }}</option></select></div></div><label>短信标签（逗号分隔）</label><input v-model="routingRuleForm.tagsText" class="field" placeholder="verification, finance"><label class="checkbox-row"><input v-model="routingRuleForm.enabled" type="checkbox"> 启用规则</label><div class="toolbar"><button class="btn primary">{{ editingRoutingRuleId ? '保存修改' : '保存规则' }}</button><button class="btn" type="button" @click="resetRoutingRuleForm">取消</button></div></form>
+          </div>
         </section>
 
         <section v-if="!loading && page === 'esim'" class="page esim-page">
@@ -892,9 +891,9 @@ onBeforeUnmount(() => {
           </div>
 
           <div class="card top-gap esim-command-panel">
-            <div class="card-head toolbar"><b>终端命令</b><span class="status gray">{{ selectedEsimCommands.length }} 条</span><select v-model.number="esimCommandPageSize" class="select"><option :value="10">每页 10 条</option><option :value="20">每页 20 条</option><option :value="50">每页 50 条</option></select><button class="btn small" @click="loadAll()">刷新</button></div>
+            <div class="card-head toolbar"><b>终端命令</b><span class="status gray">{{ selectedEsimCommands.length }} 条</span><button class="btn small" @click="loadAll()">刷新</button></div>
             <table><thead><tr><th>时间</th><th>命令</th><th>状态</th><th>结果</th></tr></thead><tbody><tr v-for="command in pagedEsimCommands" :key="command.id"><td>{{ formatTime(command.createdAt) }}</td><td>{{ command.type }}<small class="mono">{{ command.id }}</small></td><td><span :class="['status', statusClass(command.status)]">{{ command.status }}</span></td><td>{{ command.result || '-' }}</td></tr><tr v-if="selectedEsimCommands.length === 0"><td colspan="4" class="muted">当前终端暂无 eSIM 命令。</td></tr></tbody></table>
-            <div v-if="selectedEsimCommands.length > 0" class="pager">第 {{ esimCommandPage }} 页，共 {{ esimCommandTotalPages }} 页；共 {{ selectedEsimCommands.length }} 条 <button class="btn small" :disabled="esimCommandPage <= 1" @click="esimCommandPage--">上一页</button><button class="btn small primary" disabled>{{ esimCommandPage }}</button><button class="btn small" :disabled="esimCommandPage >= esimCommandTotalPages" @click="esimCommandPage++">下一页</button></div>
+            <PaginationBar v-if="selectedEsimCommands.length" :page="esimCommandPage" :page-size="esimCommandPageSize" :total="selectedEsimCommands.length" @change="esimCommandPage = $event" @page-size-change="esimCommandPageSize = $event" />
           </div>
           <div v-for="task in selectedDeviceTasks" :key="task.id" class="card top-gap esim-task-progress"><div><b>{{ task.type }}</b><p>{{ task.stage }}</p></div><span>{{ task.progress }}%</span><div class="progress"><span :style="{ width: task.progress + '%' }"></span></div></div>
         </section>
@@ -906,9 +905,9 @@ onBeforeUnmount(() => {
           <div v-if="showEsimSubscriptionDialog" class="modal-backdrop" @click.self="showEsimSubscriptionDialog = false"><form class="card form modal" @submit.prevent="saveEsimSubscription"><div class="card-head"><b>{{ editingEsimSubscriptionId ? '编辑订阅策略' : '新增订阅策略' }}</b><button class="btn small" type="button" @click="showEsimSubscriptionDialog = false">关闭</button></div><label>终端</label><select class="field" :value="subscriptionDialogDeviceId" :disabled="!!editingEsimSubscriptionId" @change="selectSubscriptionDialogDevice(($event.target as HTMLSelectElement).value)" required><option v-for="device in devices" :key="device.id" :value="device.id">{{ device.name }} / {{ device.eid }} / {{ device.status }}</option></select><label>号码 / Profile</label><select v-model="esimSubscriptionForm.profileId" class="field" :disabled="!!editingEsimSubscriptionId" required><option v-for="profile in editingEsimSubscriptionId ? subscriptionDialogProfiles : availableSubscriptionDialogProfiles" :key="profile.id" :value="profile.id">{{ profileOptionLabel(profile) }}</option></select><div v-if="subscriptionDialogSelectedProfile" class="subscription-profile-summary"><div><span>Profile</span><b>{{ subscriptionDialogSelectedProfile.nickname || subscriptionDialogSelectedProfile.profileName || subscriptionDialogSelectedProfile.provider || '-' }}</b></div><div><span>运营商</span><b>{{ subscriptionDialogSelectedProfile.provider || '-' }}</b></div><div><span>ICCID</span><b class="mono">{{ subscriptionDialogSelectedProfile.iccid }}</b></div><div><span>当前号码</span><b class="mono">{{ subscriptionDialogSelectedProfile.state === 'enabled' ? subscriptionDialogDevice?.phoneNumber || '-' : '非当前启用 Profile' }}</b></div></div><label>策略类型</label><select v-model="esimSubscriptionForm.type" class="field"><option value="recharge">充值提醒</option><option value="sms_keepalive">短信保活</option></select><label>开始时间</label><input v-model="esimSubscriptionForm.startAt" class="field" type="datetime-local" required><label>执行间隔（天）</label><input v-model.number="esimSubscriptionForm.intervalDays" class="field" type="number" min="1"><template v-if="esimSubscriptionForm.type === 'recharge'"><label>充值金额/套餐</label><input v-model="esimSubscriptionForm.rechargeAmount" class="field" placeholder="20 CNY"></template><template v-else><label>保活短信号码</label><input v-model="esimSubscriptionForm.keepaliveNumber" class="field" placeholder="10086" required><label>保活短信内容</label><input v-model="esimSubscriptionForm.keepaliveMessage" class="field" placeholder="CXLL" required></template><label>消息提醒 Target</label><select v-model="esimSubscriptionForm.targetIds" class="field" multiple required><option v-for="target in channels.filter((item) => item.enabled)" :key="target.id" :value="target.id">{{ target.name }} / {{ target.serviceName }} / {{ target.configKey }}</option></select><small v-if="channels.filter((item) => item.enabled).length === 0" class="muted">请先在消息分发中配置并启用 Apprise Target。</small><label>备注</label><textarea v-model="esimSubscriptionForm.note" placeholder="用途、套餐说明、注意事项"></textarea><label class="checkbox-row"><input v-model="esimSubscriptionForm.enabled" type="checkbox"> 启用策略</label><button class="btn primary" :disabled="!esimSubscriptionForm.profileId || esimSubscriptionForm.targetIds.length === 0">{{ editingEsimSubscriptionId ? '保存修改' : '保存订阅策略' }}</button></form></div>
         </section>
 
-        <section v-if="!loading && page === 'tools'" class="page"><div class="page-head"><div><h1>诊断工具</h1><p>查询、Ping、飞行模式、重启、AT 终端会创建终端命令，由设备领取执行。</p></div></div><div class="grid layout-tools"><div class="card form"><label>终端</label><select v-model="toolDeviceId" class="field"><option v-for="device in devices" :key="device.id" :value="device.id">{{ device.name }} / {{ device.status }}</option></select><div class="toolbar"><button class="btn" @click="runDiagnosticCommand('at_command', { command: 'ATI' })">ATI</button><button class="btn" @click="runDiagnosticCommand('query_signal')">信号</button><button class="btn" @click="runDiagnosticCommand('query_sim')">SIM 信息</button><button class="btn" @click="runDiagnosticCommand('query_network')">网络状态</button><button class="btn" @click="runDiagnosticCommand('ping', { host: '8.8.8.8' })">Ping</button><button class="btn" @click="runDiagnosticCommand('modem_airplane_toggle')">飞行模式</button><button class="btn danger" @click="runDiagnosticCommand('modem_hardreset')">硬重启</button></div><label>AT 指令</label><input v-model="toolATCommand" class="field mono" placeholder="AT+CSQ"><button class="btn primary" @click="runDiagnosticCommand('at_command', { command: toolATCommand })" :disabled="!toolDeviceId || !toolATCommand.trim()">发送 AT</button><div v-if="toolResult" class="alert success">{{ toolResult }}</div></div><div class="card terminal"><div v-for="command in commands.filter((item) => item.deviceId === toolDeviceId).slice(0, 8)" :key="command.id">{{ formatTime(command.createdAt) }} [{{ command.status }}] {{ command.type }} {{ JSON.stringify(command.payload) }}</div><div v-if="commands.filter((item) => item.deviceId === toolDeviceId).length === 0">当前终端暂无命令。</div></div></div></section>
+        <ToolsPage v-if="!loading && page === 'tools'" v-model:device-id="toolDeviceId" v-model:at-command="toolATCommand" v-model:active-command-id="activeToolCommandId" :devices="devices" :commands="commands" :result="toolResult" @run-command="runDiagnosticCommand" @refresh="loadAll" />
 
-        <LogsPage v-if="!loading && page === 'logs'" :logs="logs" />
+        <LogsPage v-if="!loading && page === 'logs'" :logs="logs" :devices="devices" />
 
         <AuditPage v-if="!loading && page === 'audit'" :audit="audit" />
   </AppShell>

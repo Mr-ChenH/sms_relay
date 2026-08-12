@@ -221,6 +221,7 @@ type LogEntry struct {
 
 type AuditLog struct {
 	ID               string    `json:"id"`
+	CommandID        string    `json:"commandId,omitempty"`
 	Actor            string    `json:"actor"`
 	DeviceName       string    `json:"deviceName"`
 	Action           string    `json:"action"`
