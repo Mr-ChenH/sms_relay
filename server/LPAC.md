@@ -14,9 +14,16 @@ Windows can still run the management API and all non-download features: Profile 
 
 ## Linux and Docker
 
-`docker compose build api` compiles the pinned lpac release and installs it at `/usr/local/bin/lpac`. Run the stack normally with `docker compose up`.
+`docker compose -f docker-compose.build.yml build api` compiles the pinned lpac v2.2.1 release and installs it at `/usr/local/bin/lpac`. This version is intentionally pinned because lpac v2.3.0 has an upstream `stdio` APDU regression that exits before reading responses. Run the locally built stack with `docker compose -f docker-compose.build.yml up`; the default `docker compose up` instead pulls `xmoli/sms-relay:latest` from Docker Hub.
 
-For a native Linux API process, install lpac from an upstream release and either put it on `PATH` or set:
+For native Linux development, install the same pinned upstream release used by Docker:
+
+```bash
+cd server
+mise run lpac:install
+```
+
+The installer verifies the release archive checksum, keeps the upstream license files, and installs the executable at `server/tools/lpac/lpac`, where the API discovers it automatically. Alternatively, install lpac yourself and either put it on `PATH` or set:
 
 ```bash
 export LPAC_PATH=/opt/lpac/lpac

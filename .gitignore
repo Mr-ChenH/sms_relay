@@ -4,4 +4,6 @@ NUL
 *.exe
 docs/
 *.exe*
+server/tools/lpac/
+/server/smshub
 .gitkeep

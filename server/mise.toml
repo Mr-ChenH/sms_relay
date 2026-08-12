@@ -26,6 +26,10 @@ sources = ["package.json", "package-lock.json"]
 outputs = ["node_modules/.package-lock.json"]
 run = "npm ci"
 
+[tasks."lpac:install"]
+description = "Install the pinned lpac release for native Linux development"
+run = "../scripts/install-lpac.sh"
+
 [tasks.dev]
 description = "Run the API and web development servers"
 depends = ["dev:api", "dev:web"]
@@ -90,9 +94,13 @@ run = [
 ]
 
 [tasks.up]
-description = "Start the complete stack with Docker Compose"
+description = "Start the Docker Hub deployment"
 run = "docker compose up"
 
+[tasks."up:build"]
+description = "Build the current source and start the complete stack"
+run = "docker compose -f docker-compose.build.yml up --build"
+
 [tasks.down]
-description = "Stop the Docker Compose stack"
+description = "Stop the Docker Hub deployment"
 run = "docker compose down"

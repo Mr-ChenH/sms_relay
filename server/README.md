@@ -14,20 +14,45 @@ server/
 
 ## Run With Docker Compose
 
+### Docker Hub image
+
+The default Compose file pulls `xmoli/sms-relay:latest`. The image contains the Go API, production Vue application, embedded MQTT broker, and lpac.
+
 ```bash
 cd server
-docker compose up
+docker compose pull
+docker compose up -d
 ```
+
+### Build from source
+
+Use the separate build configuration to create `sms-relay:local` from the current checkout:
+
+```bash
+cd server
+docker compose -f docker-compose.build.yml up -d --build
+```
+
+Both configurations expose the same services and use the same `sms-hub-data` volume, so do not run them at the same time.
 
 Services:
 
-- SMS Hub API: `http://localhost:8080`
-- SMS Hub Web: `http://localhost:5173`
+- SMS Hub Web and API: `http://localhost:8080`
+- Embedded MQTT broker: `mqtt://localhost:1883`
 - Apprise API: `http://localhost:8000`
 
-The Go API calls Apprise through `APPRISE_BASE_URL=http://apprise:8000` in compose. API data is persisted to `server/data/smshub.db` via SQLite.
+The Go API calls Apprise through `APPRISE_BASE_URL=http://apprise:8000`. API data is persisted in the Docker `sms-hub-data` named volume.
 
 ## Run API Locally
+
+Install the pinned lpac release once when eSIM Profile download is needed:
+
+```bash
+cd server
+mise run lpac:install
+```
+
+Then start the API:
 
 ```bash
 cd server/api

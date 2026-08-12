@@ -72,7 +72,7 @@
                │              └───────────────────┘
                ▼
 ┌──────────────────────────────┐
-│ Vue 3 管理台 :5173           │
+│ Vue 3 管理台 :8080           │
 │ 总览 / 终端 / 短信 / eSIM    │
 │ 分发 / 诊断 / 日志 / 审计    │
 └──────────────────────────────┘
@@ -90,13 +90,13 @@
 
 ## 快速开始
 
-最快的体验方式是使用 Docker Compose 启动 Go API、Vue 管理台和 Apprise API。
+最快的部署方式是使用 Docker Compose 拉取 `xmoli/sms-relay:latest`。生产镜像已包含 Go API、Vue 管理台、内置 MQTT Broker 和 lpac；Compose 另外启动 Apprise API。
 
 ### 前置条件
 
 - Docker Engine 及 Docker Compose v2
 - 可被 ESP32 访问的局域网 IP
-- 空闲端口：`5173`、`8080`、`1883`、`8000`
+- 空闲端口：`8080`、`1883`、`8000`
 
 ### 1. 配置服务端可访问地址
 
@@ -121,18 +121,26 @@ SMS_HUB_PUBLIC_BASE_URL=http://192.168.1.10:8080
 SMS_HUB_PUBLIC_MQTT_BROKER=mqtt://192.168.1.10:1883
 ```
 
-### 2. 启动完整服务
+### 2. 从 Docker Hub 启动
+
+默认 Compose 文件直接拉取 `xmoli/sms-relay:latest`：
 
 ```bash
-docker compose up
+docker compose pull
+docker compose up -d
 ```
 
-首次启动会拉取 Go、Node 和 Apprise 镜像，并安装前端依赖。启动后访问：
+需要基于当前源码构建时，使用独立的 build 配置：
+
+```bash
+docker compose -f docker-compose.build.yml up -d --build
+```
+
+两种方式使用相同的服务端口和 `sms-hub-data` 数据卷，不要同时启动。启动后访问：
 
 | 服务 | 地址 | 用途 |
 | --- | --- | --- |
-| Web 管理台 | <http://localhost:5173> | 日常管理入口 |
-| SMS Hub API | <http://localhost:8080> | 管理 API 与健康检查 |
+| Web 管理台与 API | <http://localhost:8080> | 日常管理入口、管理 API 与健康检查 |
 | MQTT Broker | `mqtt://localhost:1883` | ESP32 终端通信 |
 | Apprise API | <http://localhost:8000> | 通知渠道配置与发送 |
 
@@ -142,10 +150,10 @@ docker compose up
 curl http://localhost:8080/api/health
 ```
 
-数据默认保存在：
+SQLite 数据默认保存在 Docker 命名卷 `sms-hub-data` 中。查看实际卷名：
 
-```text
-server/data/smshub.db
+```bash
+docker volume ls | grep sms-hub-data
 ```
 
 停止服务：
@@ -154,7 +162,7 @@ server/data/smshub.db
 docker compose down
 ```
 
-> `docker compose down` 不会删除 `server/data/smshub.db`。备份系统时应同时备份该数据库和 `server/apprise/` 下的配置。
+> `docker compose down` 不会删除 SQLite 数据卷；不要使用 `docker compose down -v`，除非确定要删除数据库。备份系统时应同时备份该数据卷和 `server/apprise/` 下的配置。
 
 ## 硬件准备与接线
 
@@ -444,7 +452,7 @@ MCP 可以访问短信正文、号码和终端信息，因此即使只启用查�
 
 Profile 下载由服务端运行的 `lpac` LPA 完成。Go API 通过 MQTT APDU 隧道访问 ESP32-C3 后面的 ML307/eUICC；`lpac` 执行 SGP.22 ES9+ HTTPS 与 ES10b 流程，包括双方认证、确认码处理、Bound Profile Package 下载、分段安装和失败会话取消。
 
-运行前必须在 **Linux 服务端**安装带 `stdio` APDU backend 的 `lpac`，并通过 `LPAC_PATH` 指定可执行文件。Docker Compose 会在 API 镜像中构建固定版本。Windows 服务端不支持 Profile 下载，但仍支持 Profile 查询、启用、删除及其他管理功能。部署和许可证说明见 [`server/LPAC.md`](server/LPAC.md)。
+运行前必须在 **Linux 服务端**安装带 `stdio` APDU backend 的 `lpac`。原生 Linux 开发可在 `server/` 目录执行 `mise run lpac:install`，项目会下载并校验与 Docker 镜像相同的固定版本，API 会自动发现 `server/tools/lpac/lpac`；也可以自行安装后通过 `LPAC_PATH` 指定可执行文件。Docker Compose 会在 API 镜像中构建固定版本。Windows 服务端不支持 Profile 下载，但仍支持 Profile 查询、启用、删除及其他管理功能。部署和许可证说明见 [`server/LPAC.md`](server/LPAC.md)。
 
 下载期间服务端、MQTT 和终端必须持续在线。激活码通常只能使用一次，首次验证应使用测试 Profile，且安装期间不要断电。当前集成以 lpac 的 SGP.22 v2.2.2 兼容能力为准；更高版本新增的可选特性取决于 lpac、eUICC 和 SM-DP+ 的支持情况。
 
@@ -539,8 +547,9 @@ mise run dev
 mise run test   # Go 测试 + Web 类型检查/构建
 mise run build  # 构建 server/smshub 与 Web dist
 mise run check  # gofmt、go vet、Go 测试、Web 构建
-mise run up     # docker compose up
-mise run down   # docker compose down
+mise run up     # 从 Docker Hub 启动 xmoli/sms-relay:latest
+mise run up:build # 从当前源码构建并启动
+mise run down   # 停止默认 Docker Hub 部署
 ```
 
 ### 不使用 mise
@@ -595,7 +604,8 @@ sms_forwarding/
 │   ├── web/                      Vue 3 + TypeScript + Vite 管理台
 │   ├── apprise/                  Apprise 配置挂载目录
 │   ├── data/                     SQLite 数据目录
-│   ├── docker-compose.yml        本地完整栈
+│   ├── docker-compose.yml        使用 Docker Hub 镜像部署
+│   ├── docker-compose.build.yml  从当前源码构建部署
 │   └── mise.toml                 开发任务与工具版本
 ├── docs/project-factory/         产品、界面和技术设计文档
 ├── dev_doc/                      早期固件架构参考文档
@@ -665,7 +675,7 @@ SMS_HUB_PUBLIC_MQTT_BROKER=mqtt://服务器局域网IP:1883
 按任务中心显示的阶段定位：
 
 - Windows 平台提示不支持：将 API 部署到 Linux 或使用 Docker Compose。
-- `lpac executable not found`：在 Linux 安装 lpac 或设置 `LPAC_PATH`。
+- `lpac executable not found`：在 `server/` 执行 `mise run lpac:install` 后重启 API，或设置 `LPAC_PATH`。
 - APDU timeout：检查终端在线状态、MQTT 连通性和 ML307 串口。
 - ES9+ / SM-DP+ 错误：检查服务器 DNS、时间、系统 CA、激活码和确认码。
 - ES10b 安装错误：检查 eUICC 剩余空间、Profile 策略和兼容性。
@@ -686,7 +696,7 @@ SMS_HUB_PUBLIC_MQTT_BROKER=mqtt://服务器局域网IP:1883
 1. 使用防火墙限制来源 IP。
 2. 在 Web/API 前增加 HTTPS 反向代理和身份认证。
 3. 为 MQTT 启用 TLS、用户名、密码和 ACL；仅允许 API 使用终端 APDU request topic。
-4. 保护 `server/data/smshub.db` 和 Apprise 配置目录。
+4. Docker 部署需保护 `sms-hub-data` 数据卷；原生部署需保护 `server/data/smshub.db`；两种方式都要保护 Apprise 配置目录。
 5. 定期备份 SQLite 与通知配置。
 6. 不在日志、Issue 或截图中公开短信内容、激活码、Webhook 和 Token。
 
