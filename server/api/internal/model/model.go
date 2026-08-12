@@ -128,14 +128,24 @@ type EsimProfile struct {
 	State       string `json:"state"`
 }
 
+type EsimTaskEvent struct {
+	Status    string    `json:"status"`
+	Stage     string    `json:"stage"`
+	Progress  int       `json:"progress"`
+	CreatedAt time.Time `json:"createdAt"`
+}
+
 type EsimTask struct {
-	ID       string `json:"id"`
-	DeviceID string `json:"deviceId"`
-	AuditID  string `json:"auditId,omitempty"`
-	Type     string `json:"type"`
-	Status   string `json:"status"`
-	Stage    string `json:"stage"`
-	Progress int    `json:"progress"`
+	ID        string          `json:"id"`
+	DeviceID  string          `json:"deviceId"`
+	AuditID   string          `json:"auditId,omitempty"`
+	Type      string          `json:"type"`
+	Status    string          `json:"status"`
+	Stage     string          `json:"stage"`
+	Progress  int             `json:"progress"`
+	History   []EsimTaskEvent `json:"history"`
+	CreatedAt time.Time       `json:"createdAt"`
+	UpdatedAt time.Time       `json:"updatedAt"`
 }
 
 type CreateEsimTaskRequest struct {

@@ -145,6 +145,13 @@ export interface EsimProfile {
   state: string
 }
 
+export interface EsimTaskEvent {
+  status: string
+  stage: string
+  progress: number
+  createdAt: string
+}
+
 export interface EsimOperationTask {
   id: string
   deviceId: string
@@ -152,7 +159,9 @@ export interface EsimOperationTask {
   status: string
   stage: string
   progress: number
+  history?: EsimTaskEvent[]
   createdAt?: string
+  updatedAt?: string
 }
 
 export interface EsimTask {
@@ -162,6 +171,9 @@ export interface EsimTask {
   status: string
   stage: string
   progress: number
+  history: EsimTaskEvent[]
+  createdAt: string
+  updatedAt: string
 }
 
 export interface CreateEsimTaskRequest {

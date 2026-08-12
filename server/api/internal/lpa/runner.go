@@ -37,8 +37,9 @@ type stdioMessage struct {
 }
 
 type lpaPayload struct {
-	Code    int    `json:"code"`
-	Message string `json:"message"`
+	Code    int             `json:"code"`
+	Message string          `json:"message"`
+	Data    json.RawMessage `json:"data"`
 }
 
 type progressPayload struct {
@@ -168,7 +169,9 @@ func (r *Runner) run(taskID, deviceID, activationCode, confirmationCode string) 
 
 	finalCode := -1
 	finalMessage := "lpac exited without a final result"
+	finalDetail := ""
 	lastExchangeError := ""
+	pipeError := ""
 	pipeFailed := false
 	scanner := bufio.NewScanner(stdout)
 	scanner.Buffer(make([]byte, 4096), 2*1024*1024)
@@ -189,11 +192,8 @@ func (r *Runner) run(taskID, deviceID, activationCode, confirmationCode string) 
 				response = APDUResponse{ECode: -1, Error: exchangeErr.Error()}
 			}
 			if err := writeAPDUResponse(stdin, response); err != nil {
-				finalMessage = err.Error()
+				pipeError = err.Error()
 				pipeFailed = true
-				if cmd.Process != nil {
-					_ = cmd.Process.Kill()
-				}
 			}
 		case "progress":
 			var progress progressPayload
@@ -204,11 +204,8 @@ func (r *Runner) run(taskID, deviceID, activationCode, confirmationCode string) 
 		case "lpa":
 			var result lpaPayload
 			if json.Unmarshal(message.Payload, &result) == nil {
-				finalCode, finalMessage = result.Code, result.Message
+				finalCode, finalMessage, finalDetail = result.Code, result.Message, lpaResultDetail(result.Data)
 			}
-		}
-		if pipeFailed {
-			break
 		}
 	}
 	_ = stdin.Close()
@@ -225,9 +222,15 @@ func (r *Runner) run(taskID, deviceID, activationCode, confirmationCode string) 
 		detail := strings.TrimSpace(stderr.String())
 		if detail == "" && finalMessage != "" && finalMessage != "lpac exited without a final result" {
 			detail = finalMessage
+			if finalDetail != "" {
+				detail += "：" + finalDetail
+			}
 		}
 		if detail == "" && lastExchangeError != "" {
 			detail = lastExchangeError
+		}
+		if detail == "" && pipeError != "" {
+			detail = "lpac closed its APDU input: " + pipeError
 		}
 		if detail == "" && pipeFailed {
 			detail = "lpac closed the APDU pipe before the operation completed"
@@ -235,13 +238,24 @@ func (r *Runner) run(taskID, deviceID, activationCode, confirmationCode string) 
 		if detail == "" {
 			detail = "lpac exited without a final result"
 		}
-		if waitErr != nil && !pipeFailed {
+		if waitErr != nil && !pipeFailed && finalMessage == "lpac exited without a final result" {
 			detail = fmt.Sprintf("%s: %v", detail, waitErr)
 		}
 		r.fail(taskID, errors.New(detail))
 		return
 	}
 	_ = r.updater.UpdateEsimTask(taskID, "succeeded", "Profile 下载并安装完成", 100)
+}
+
+func lpaResultDetail(data json.RawMessage) string {
+	if len(data) == 0 || string(data) == "null" {
+		return ""
+	}
+	var text string
+	if json.Unmarshal(data, &text) == nil {
+		return strings.TrimSpace(text)
+	}
+	return ""
 }
 
 func writeAPDUResponse(w io.Writer, response APDUResponse) error {

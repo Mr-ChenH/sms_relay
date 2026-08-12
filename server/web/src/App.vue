@@ -10,17 +10,7 @@ import OverviewPage from './pages/OverviewPage.vue'
 import SendSmsPage from './pages/SendSmsPage.vue'
 import ToolsPage from './pages/ToolsPage.vue'
 import type { AppriseService, AppriseTarget, AuditLog, CommandResult, CreateAppriseServiceRequest, CreateAppriseTargetRequest, CreateDeviceCommandRequest, CreateEsimSubscriptionRequest, CreateEsimTaskRequest, CreateRoutingRuleRequest, Dashboard, Device, DeviceCommand, EsimCapabilities, EsimOperationTask, EsimProfile, EsimSubscription, EsimTask, LogEntry, RoutingRule, SMSList, SMSMessage, Page } from './types'
-import { formatTime, statusClass } from './utils/ui'
-
-type BarcodeDetectorConstructor = new (options?: { formats?: string[] }) => {
-  detect: (source: CanvasImageSource) => Promise<Array<{ rawValue: string }>>
-}
-
-declare global {
-  interface Window {
-    BarcodeDetector?: BarcodeDetectorConstructor
-  }
-}
+import { formatLogTime, formatTime, statusClass } from './utils/ui'
 
 const page = ref<Page>('overview')
 const loading = ref(true)
@@ -442,6 +432,38 @@ function esimTaskLabel(type: string) {
   return labels[type] || type.replaceAll('_', ' ')
 }
 
+function esimTaskDisplayStage(task: EsimOperationTask) {
+  const stage = task.stage || '等待任务状态'
+  const normalized = stage.toLowerCase()
+  if (normalized.includes('profile has not yet been released or deleted')) return '运营商尚未释放该 Profile，或已将其删除'
+  if (normalized.includes("eid doesn't match") || normalized.includes('eid does not match')) return '该 Profile 绑定的 EID 与当前终端不一致'
+  if (normalized.includes('matchingid') && normalized.includes('refus')) return '运营商拒绝了该激活码的 Matching ID'
+  if (normalized.includes('already in use')) return '该 Profile 正在使用中，可能已被其他设备领取'
+  if (normalized.includes('confirmation code is missing') || normalized.includes('confirmation_code：required')) return '该 Profile 需要确认码'
+  if (normalized.includes('confirmation code is refused')) return '确认码不正确或已失效'
+  if (normalized.includes('download order has expired')) return '该 Profile 下载订单已经过期'
+  if (normalized.includes('sufficient space')) return 'eUICC 空间不足，无法安装新 Profile'
+  if (normalized.includes('http transport failed')) return '无法连接运营商 SM-DP+ 服务'
+  return stage
+}
+
+function esimTaskAdvice(task: EsimOperationTask) {
+  if (task.status !== 'failed') return ''
+  const normalized = task.stage.toLowerCase()
+  if (normalized.includes('profile has not yet been released or deleted')) return '请停止重复尝试，联系 eSIM 供应商释放该 Profile 或签发新的激活码。'
+  if (normalized.includes("eid doesn't match") || normalized.includes('eid does not match')) return `请让供应商将 Profile 重新绑定到当前 EID：${selectedEsimDevice.value?.eid || '-'}`
+  if (normalized.includes('matchingid') || normalized.includes('already in use') || normalized.includes('download order has expired')) return '请联系 eSIM 供应商重置下载订单或签发新的激活码。'
+  if (normalized.includes('confirmation')) return '请核对供应商提供的确认码，避免连续尝试触发次数限制。'
+  if (normalized.includes('sufficient space')) return '请先删除不再使用的 Profile，再重新下载。'
+  if (normalized.includes('http transport failed')) return '请检查服务端 DNS、系统时间、CA 证书和外网连接。'
+  return '请展开阶段日志确认失败位置，再根据原始错误联系运营商或检查终端连接。'
+}
+
+function esimTaskHistory(task: EsimOperationTask) {
+  if (task.history?.length) return task.history
+  return [{ status: task.status, stage: task.stage, progress: task.progress, createdAt: task.updatedAt || task.createdAt || '' }]
+}
+
 function commandOperationTask(command: DeviceCommand): EsimOperationTask {
   const status = command.status || 'pending'
   const progress = ['succeeded', 'success', 'completed'].includes(status) ? 100 : status === 'claimed' ? 45 : status === 'failed' ? 0 : 10
@@ -778,39 +800,13 @@ function parseActivationCode(value: string) {
   }
 }
 
-async function decodeQrFile(file: File) {
-  if (window.BarcodeDetector) {
-    try {
-      const bitmap = await createImageBitmap(file)
-      try {
-        const detector = new window.BarcodeDetector({ formats: ['qr_code'] })
-        const codes = await detector.detect(bitmap)
-        const value = codes.find((code) => code.rawValue)?.rawValue
-        if (value) return value
-      } finally {
-        bitmap.close()
-      }
-    } catch {
-      // Fall through to ZXing for browsers with partial BarcodeDetector support.
-    }
-  }
-
-  const objectUrl = URL.createObjectURL(file)
-  try {
-    const { BrowserQRCodeReader } = await import('@zxing/browser')
-    const result = await new BrowserQRCodeReader().decodeFromImageUrl(objectUrl)
-    return result.getText()
-  } finally {
-    URL.revokeObjectURL(objectUrl)
-  }
-}
-
 async function readEsimQr(event: Event) {
   esimQrResult.value = ''
   const input = event.target as HTMLInputElement
   const file = input.files?.[0]
   if (!file) return
   try {
+    const { decodeQrFile } = await import('./utils/qr')
     const value = await decodeQrFile(file)
     if (!value) {
       esimQrResult.value = '未识别到二维码内容，请使用清晰、完整的二维码图片。'
@@ -818,8 +814,10 @@ async function readEsimQr(event: Event) {
     }
     parseActivationCode(value)
     esimQrResult.value = value.toUpperCase().startsWith('LPA:') ? '已识别 eSIM 激活码' : '已识别二维码内容，请确认是否为 eSIM 激活码'
-  } catch {
-    esimQrResult.value = '未识别到二维码，请使用清晰、完整的 PNG、JPG 或相机照片。'
+  } catch (decodeError) {
+    esimQrResult.value = decodeError instanceof Error && decodeError.message === 'image-load-failed'
+      ? '无法读取图片，请转换为 PNG 或 JPG 后重试。'
+      : '二维码解析失败，请使用清晰、完整且未裁掉边缘的图片。'
   } finally {
     input.value = ''
   }
@@ -984,10 +982,10 @@ onBeforeUnmount(() => {
             <aside class="card esim-task-center">
               <div class="card-head"><div><b>任务中心</b><small>添加、启用和删除 Profile 的实时状态</small></div><div class="esim-task-summary"><span v-if="activeDeviceTasks.length" class="status warn">{{ activeDeviceTasks.length }} 进行中</span><span class="status gray">{{ completedDeviceTasks.length }} 已结束</span></div></div>
               <div v-if="activeDeviceTasks.length" class="esim-task-list">
-                <article v-for="task in activeDeviceTasks" :key="task.id" class="esim-task-item active"><div><b>{{ esimTaskLabel(task.type) }}</b><span :class="['status', statusClass(task.status)]">{{ esimStatusLabel(task.status) }}</span></div><p>{{ task.stage }}</p><div class="esim-task-value"><span>{{ task.progress }}%</span><small class="mono">{{ task.id }}</small></div><div class="progress"><span :style="{ width: task.progress + '%' }"></span></div></article>
+                <article v-for="task in activeDeviceTasks" :key="task.id" class="esim-task-item active"><div><b>{{ esimTaskLabel(task.type) }}</b><span :class="['status', statusClass(task.status)]">{{ esimStatusLabel(task.status) }}</span></div><p>{{ esimTaskDisplayStage(task) }}</p><div class="esim-task-value"><span>{{ task.progress }}%</span><small class="mono">{{ task.id }}</small></div><div class="progress"><span :style="{ width: task.progress + '%' }"></span></div><ol class="esim-task-history"><li v-for="(event, index) in esimTaskHistory(task)" :key="`${event.createdAt}-${index}`"><time>{{ event.createdAt ? formatLogTime(event.createdAt) : '-' }}</time><span>{{ event.stage }}</span><b>{{ event.progress }}%</b></li></ol></article>
               </div>
               <div v-else class="empty esim-task-empty"><b>当前没有进行中的任务</b><small>添加、启用或删除 Profile 后，状态会显示在这里。</small></div>
-              <div v-if="completedDeviceTasks.length" class="esim-completed-tasks"><div class="esim-subhead">最近完成</div><div v-for="task in completedDeviceTasks.slice(0, 4)" :key="task.id" class="esim-completed-row"><div><b>{{ esimTaskLabel(task.type) }}</b><small>{{ task.stage }}</small></div><span :class="['status', statusClass(task.status)]">{{ esimStatusLabel(task.status) }}</span></div></div>
+              <div v-if="completedDeviceTasks.length" class="esim-completed-tasks"><div class="esim-subhead">最近完成</div><details v-for="task in completedDeviceTasks.slice(0, 4)" :key="task.id" class="esim-completed-row"><summary><div><b>{{ esimTaskLabel(task.type) }}</b><small>{{ esimTaskDisplayStage(task) }}</small><small v-if="esimTaskAdvice(task)" class="esim-task-advice">{{ esimTaskAdvice(task) }}</small></div><span :class="['status', statusClass(task.status)]">{{ esimStatusLabel(task.status) }}</span></summary><ol class="esim-task-history"><li v-for="(event, index) in esimTaskHistory(task)" :key="`${event.createdAt}-${index}`"><time>{{ event.createdAt ? formatLogTime(event.createdAt) : '-' }}</time><span>{{ event.stage }}</span><b>{{ event.progress }}%</b></li></ol></details></div>
             </aside>
           </div>
 

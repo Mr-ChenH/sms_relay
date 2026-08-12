@@ -113,10 +113,23 @@ func (s *Store) initSQLite(ctx context.Context) error {
 	s.commands = state.Commands
 	s.nextID = state.NextID
 	for i := range s.esimTasks {
-		if s.esimTasks[i].Status == "pending" || s.esimTasks[i].Status == "running" {
-			s.esimTasks[i].Status = "failed"
-			s.esimTasks[i].Stage = "服务端重启，LPA 下载会话无法恢复"
-			s.esimTasks[i].Progress = 0
+		task := &s.esimTasks[i]
+		now := time.Now()
+		if task.CreatedAt.IsZero() {
+			task.CreatedAt = now
+		}
+		if task.UpdatedAt.IsZero() {
+			task.UpdatedAt = task.CreatedAt
+		}
+		if len(task.History) == 0 && task.Stage != "" {
+			task.History = []model.EsimTaskEvent{{Status: task.Status, Stage: task.Stage, Progress: task.Progress, CreatedAt: task.UpdatedAt}}
+		}
+		if task.Status == "pending" || task.Status == "running" {
+			task.Status = "failed"
+			task.Stage = "服务端重启，LPA 下载会话无法恢复"
+			task.Progress = 0
+			task.UpdatedAt = now
+			task.History = append(task.History, model.EsimTaskEvent{Status: task.Status, Stage: task.Stage, Progress: task.Progress, CreatedAt: now})
 		}
 	}
 	if s.nextID < 100 {
@@ -788,15 +801,18 @@ func (s *Store) CreateEsimTask(req model.CreateEsimTaskRequest) (model.EsimTask,
 		}
 	}
 	auditID := s.nextIDStringLocked("audit")
+	now := time.Now()
+	initialStage := "等待 LPA 启动"
 	task := model.EsimTask{
 		ID: s.nextIDStringLocked("esim-task"), DeviceID: device.ID, AuditID: auditID, Type: "download_profile",
-		Status: "pending", Stage: "等待 LPA 启动", Progress: 0,
+		Status: "pending", Stage: initialStage, Progress: 0, CreatedAt: now, UpdatedAt: now,
+		History: []model.EsimTaskEvent{{Status: "pending", Stage: initialStage, Progress: 0, CreatedAt: now}},
 	}
 	s.esimTasks = append([]model.EsimTask{task}, s.esimTasks...)
 	s.audit = append([]model.AuditLog{{
 		ID: auditID, Actor: "admin", DeviceName: device.Name,
 		Action: "esim_download_profile", ParameterSummary: maskActivationCode(activationCode),
-		Result: "pending", CreatedAt: time.Now(),
+		Result: "pending", CreatedAt: now,
 	}}, s.audit...)
 	return task, nil
 }
@@ -816,9 +832,15 @@ func (s *Store) UpdateEsimTask(id, status, stage string, progress int) error {
 		if s.esimTasks[i].ID != id {
 			continue
 		}
-		s.esimTasks[i].Status = status
-		s.esimTasks[i].Stage = stage
-		s.esimTasks[i].Progress = progress
+		task := &s.esimTasks[i]
+		task.Status = status
+		task.Stage = stage
+		task.Progress = progress
+		now := time.Now()
+		task.UpdatedAt = now
+		if len(task.History) == 0 || task.History[len(task.History)-1].Status != status || task.History[len(task.History)-1].Stage != stage || task.History[len(task.History)-1].Progress != progress {
+			task.History = append(task.History, model.EsimTaskEvent{Status: status, Stage: stage, Progress: progress, CreatedAt: now})
+		}
 		for j := range s.audit {
 			if s.audit[j].ID == s.esimTasks[i].AuditID {
 				s.audit[j].Result = status

@@ -16,16 +16,25 @@ func TestCreateAndUpdateEsimTask(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateEsimTask() error = %v", err)
 	}
-	if task.AuditID == "" || task.Status != "pending" {
+	if task.AuditID == "" || task.Status != "pending" || task.CreatedAt.IsZero() || len(task.History) != 1 {
 		t.Fatalf("unexpected task: %+v", task)
 	}
 	if err := s.UpdateEsimTask(task.ID, "running", "installing", 82); err != nil {
 		t.Fatalf("UpdateEsimTask() error = %v", err)
 	}
-	if got := s.esimTasks[0]; got.Status != "running" || got.Progress != 82 || got.Stage != "installing" {
+	if err := s.UpdateEsimTask(task.ID, "running", "installing", 82); err != nil {
+		t.Fatalf("UpdateEsimTask() duplicate error = %v", err)
+	}
+	if err := s.UpdateEsimTask(task.ID, "failed", "download failed", 0); err != nil {
+		t.Fatalf("UpdateEsimTask() failed update error = %v", err)
+	}
+	if got := s.esimTasks[0]; got.Status != "failed" || got.Progress != 0 || got.Stage != "download failed" || len(got.History) != 3 {
 		t.Fatalf("unexpected updated task: %+v", got)
 	}
-	if len(s.audit) != 1 || s.audit[0].Result != "running" {
+	if got := s.esimTasks[0].History; got[0].Stage != "等待 LPA 启动" || got[1].Stage != "installing" || got[2].Stage != "download failed" {
+		t.Fatalf("unexpected task history: %+v", got)
+	}
+	if len(s.audit) != 1 || s.audit[0].Result != "failed" {
 		t.Fatalf("unexpected audit: %+v", s.audit)
 	}
 }

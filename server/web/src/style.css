@@ -380,16 +380,25 @@ label { font-size: 12px; font-weight: 700; color: var(--muted); }
 .esim-task-list { display: grid; }
 .esim-task-item { min-width: 0; padding: 14px 16px; border-bottom: 1px solid var(--line); }
 .esim-task-item > div:first-child { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
-.esim-task-item p { margin-top: 7px; font-size: 12px; line-height: 1.45; }
+.esim-task-item p { margin-top: 7px; font-size: 12px; line-height: 1.45; overflow-wrap: anywhere; }
 .esim-task-value { display: flex; justify-content: space-between; gap: 8px; margin-top: 10px; }
 .esim-task-value > span { font-weight: 700; }
+.esim-task-history { list-style: none; margin: 12px 0 0; padding: 10px 0 0; border-top: 1px solid var(--line); display: grid; gap: 8px; }
+.esim-task-history li { min-width: 0; display: grid; grid-template-columns: 74px minmax(0, 1fr) 34px; gap: 8px; align-items: start; color: var(--muted); font-size: 11px; line-height: 1.4; }
+.esim-task-history time { white-space: nowrap; color: var(--soft); }
+.esim-task-history span { min-width: 0; overflow-wrap: anywhere; }
+.esim-task-history b { text-align: right; color: var(--text); font-size: 11px; }
 .esim-task-empty { min-height: 150px; display: grid; place-content: center; gap: 6px; text-align: center; }
 .esim-completed-tasks { border-top: 1px solid var(--line); }
 .esim-subhead { padding: 10px 16px; background: #f9fafb; color: var(--muted); font-size: 11px; font-weight: 700; }
-.esim-completed-row { min-width: 0; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 16px; border-top: 1px solid var(--line); }
-.esim-completed-row > div { min-width: 0; }
-.esim-completed-row b, .esim-completed-row small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.esim-completed-row small { margin-top: 3px; }
+.esim-completed-row { min-width: 0; border-top: 1px solid var(--line); }
+.esim-completed-row summary { min-width: 0; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 16px; cursor: pointer; list-style: none; }
+.esim-completed-row summary::-webkit-details-marker { display: none; }
+.esim-completed-row summary > div { min-width: 0; }
+.esim-completed-row summary b, .esim-completed-row summary small { display: block; }
+.esim-completed-row summary small { margin-top: 3px; white-space: normal; overflow-wrap: anywhere; }
+.esim-completed-row .esim-task-history { margin: 0 16px 12px; }
+.esim-task-advice { color: var(--danger); line-height: 1.45; }
 .esim-task-modal { width: min(680px, 100%); max-height: calc(100vh - 48px); overflow: auto; }
 .esim-form-body { padding: 16px; display: grid; gap: 16px; }
 .qr-upload { width: 100%; min-height: 86px; padding: 14px; border: 1px dashed var(--line-strong); border-radius: 7px; background: #f9fafb; color: var(--text); cursor: pointer; display: grid; place-items: center; gap: 4px; }

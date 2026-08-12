@@ -2,6 +2,7 @@ package lpa
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -47,6 +48,84 @@ func (f *fakeUpdater) UpdateEsimTask(_ string, status, stage string, _ int) erro
 		}
 	}
 	return nil
+}
+
+func TestLPAResultDetail(t *testing.T) {
+	if got := lpaResultDetail([]byte(`"EID doesn't match the expected value"`)); got != "EID doesn't match the expected value" {
+		t.Fatalf("lpaResultDetail() = %q", got)
+	}
+	for _, value := range []json.RawMessage{nil, []byte(`null`), []byte(`{"iccid":"sensitive"}`)} {
+		if got := lpaResultDetail(value); got != "" {
+			t.Fatalf("lpaResultDetail(%s) = %q, want empty", value, got)
+		}
+	}
+}
+
+func TestRunnerReportsLPAErrorDetailWithoutExitStatus(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("test fixture uses a POSIX shell script")
+	}
+	script := filepath.Join(t.TempDir(), "fake-lpac")
+	contents := `#!/bin/sh
+printf '%s\n' '{"type":"lpa","payload":{"code":-1,"message":"es9p_authenticate_client","data":"MatchingID is refused"}}'
+exit 255
+`
+	if err := os.WriteFile(script, []byte(contents), 0700); err != nil {
+		t.Fatal(err)
+	}
+	updater := &fakeUpdater{done: make(chan struct{})}
+	runner := NewRunner(&fakeTransport{}, updater)
+	runner.binary = script
+	runner.timeout = 5 * time.Second
+	if err := runner.Start("task-1", "device-1", "LPA:1$example$matching", ""); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-updater.done:
+	case <-time.After(6 * time.Second):
+		t.Fatal("runner did not finish")
+	}
+	updater.mu.Lock()
+	defer updater.mu.Unlock()
+	got := updater.updates[len(updater.updates)-1]
+	if got != "failed:下载失败：es9p_authenticate_client：MatchingID is refused" {
+		t.Fatalf("unexpected final update: %s; all=%v", got, updater.updates)
+	}
+}
+
+func TestRunnerReportsLPAErrorInsteadOfBrokenPipe(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("test fixture uses a POSIX shell script")
+	}
+	script := filepath.Join(t.TempDir(), "fake-lpac")
+	contents := `#!/bin/sh
+exec 0<&-
+printf '%s\n' '{"type":"apdu","payload":{"func":"connect","param":null}}'
+printf '%s\n' '{"type":"lpa","payload":{"code":-1,"message":"euicc_init","data":""}}'
+sleep 0.1
+exit 1
+`
+	if err := os.WriteFile(script, []byte(contents), 0700); err != nil {
+		t.Fatal(err)
+	}
+	updater := &fakeUpdater{done: make(chan struct{})}
+	runner := NewRunner(&fakeTransport{}, updater)
+	runner.binary = script
+	runner.timeout = 5 * time.Second
+	if err := runner.Start("task-1", "device-1", "LPA:1$example$matching", ""); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-updater.done:
+	case <-time.After(6 * time.Second):
+		t.Fatal("runner did not finish")
+	}
+	updater.mu.Lock()
+	defer updater.mu.Unlock()
+	got := updater.updates[len(updater.updates)-1]
+	if got != "failed:下载失败：euicc_init" {
+		t.Fatalf("unexpected final update: %s; all=%v", got, updater.updates)
+	}
 }
 
 func TestRunnerEndToEndWithStdioDriver(t *testing.T) {
