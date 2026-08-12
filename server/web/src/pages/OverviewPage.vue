@@ -79,9 +79,9 @@ function dateKey(date: Date) {
 </script>
 
 <template>
-  <section class="page">
+  <section class="page overview-page">
     <div class="page-head"><div><h1>总览</h1><p>统一查看终端健康、短信流量、失败任务和 eSIM 状态。</p></div><button class="btn primary" @click="emit('openRoutes')">创建分发规则</button></div>
-    <div class="grid cols-4">
+    <div class="grid cols-4 overview-metrics">
       <div class="card metric"><span>在线终端</span><b>{{ dashboard.onlineDevices }} / {{ dashboard.totalDevices }}</b><small>离线终端需要处理</small></div>
       <div class="card metric"><span>今日短信</span><b>{{ dashboard.todaySms }}</b><small>验证码占主要流量</small></div>
       <div class="card metric"><span>分发失败</span><b>{{ dashboard.deliveryFailures }}</b><small>检查推送通道</small></div>
@@ -134,9 +134,9 @@ function dateKey(date: Date) {
         </div>
       </div>
     </div>
-    <div class="grid layout-2 top-gap">
-      <div class="card"><div class="card-head"><b>最近短信</b><button class="btn small" @click="emit('openSms')">查看历史</button></div><table><thead><tr><th>时间</th><th>终端</th><th>发送方</th><th>接收方</th><th>内容</th><th>分发</th></tr></thead><tbody><tr v-for="item in dashboard.recentSms" :key="item.id"><td>{{ formatTime(item.timestamp) }}</td><td>{{ item.deviceName }}</td><td class="mono">{{ item.sender }}</td><td class="mono">{{ item.recipient || '-' }}</td><td class="truncate">{{ item.body }}</td><td><span :class="['status', statusClass(item.deliveryStatus)]">{{ item.deliverySummary }}</span></td></tr></tbody></table></div>
-      <div class="card"><div class="card-head"><b>待处理告警</b></div><div class="timeline"><div v-for="alert in dashboard.alerts" :key="alert.title" class="event"><span>{{ alert.time }}</span><div><b>{{ alert.title }}</b><small>{{ alert.message }}</small></div></div><div v-if="dashboard.alerts.length === 0" class="empty muted">暂无待处理告警。</div></div></div>
+    <div class="grid layout-2 overview-bottom-layout top-gap">
+      <div class="card overview-table-panel"><div class="card-head"><b>最近短信</b><button class="btn small" @click="emit('openSms')">查看历史</button></div><div class="overview-table-wrap"><table><thead><tr><th>时间</th><th>终端</th><th>发送方</th><th>接收方</th><th>内容</th><th>分发</th></tr></thead><tbody><tr v-for="item in dashboard.recentSms" :key="item.id"><td>{{ formatTime(item.timestamp) }}</td><td>{{ item.deviceName }}</td><td class="mono">{{ item.sender }}</td><td class="mono">{{ item.recipient || '-' }}</td><td class="truncate">{{ item.body }}</td><td><span :class="['status', statusClass(item.deliveryStatus)]">{{ item.deliverySummary }}</span></td></tr></tbody></table><div v-if="dashboard.recentSms.length === 0" class="empty muted">暂无最近短信。</div></div></div>
+      <div class="card overview-alert-panel"><div class="card-head"><b>待处理告警</b></div><div class="timeline overview-alert-list"><div v-for="alert in dashboard.alerts" :key="alert.title" class="event"><span>{{ alert.time }}</span><div><b>{{ alert.title }}</b><small>{{ alert.message }}</small></div></div><div v-if="dashboard.alerts.length === 0" class="empty muted">暂无待处理告警。</div></div></div>
     </div>
   </section>
 </template>
