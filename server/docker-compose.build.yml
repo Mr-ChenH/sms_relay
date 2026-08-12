@@ -1,6 +1,9 @@
 services:
   api:
-    image: xmoli/sms-relay:latest
+    build:
+      context: .
+      dockerfile: api/Dockerfile
+    image: sms-relay:local
     restart: unless-stopped
     environment:
       SMS_HUB_API_ADDR: ":8080"

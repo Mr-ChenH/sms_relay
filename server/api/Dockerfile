@@ -1,6 +1,12 @@
-FROM golang:1.25-bookworm AS lpac-build
+FROM node:20-bookworm-slim AS web-build
+WORKDIR /src/web
+COPY web/package.json web/package-lock.json ./
+RUN npm ci
+COPY web/ ./
+RUN npm run build
 
-ARG LPAC_VERSION=v2.3.0
+FROM golang:1.25-bookworm AS lpac-build
+ARG LPAC_VERSION=v2.2.1
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential ca-certificates cmake git libcurl4-openssl-dev libpcsclite-dev pkg-config \
     && rm -rf /var/lib/apt/lists/*
@@ -9,10 +15,32 @@ RUN git clone --depth 1 --branch "${LPAC_VERSION}" https://github.com/estkme-gro
     && cmake --build /src/lpac/build --parallel \
     && cmake --install /src/lpac/build
 
-FROM golang:1.25-bookworm
+FROM golang:1.25-bookworm AS api-build
+WORKDIR /src/api
+COPY api/go.mod api/go.sum ./
+RUN go mod download
+COPY api/ ./
+RUN go test ./... \
+    && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/smshub ./cmd/smshub
+
+FROM debian:bookworm-slim
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates libcurl4 \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* \
+    && groupadd --gid 10001 smshub \
+    && useradd --uid 10001 --gid smshub --create-home --home-dir /app smshub \
+    && mkdir -p /app/web /data \
+    && chown -R smshub:smshub /app /data
 COPY --from=lpac-build /usr/local/ /usr/local/
-WORKDIR /app/server/api
-ENV LPAC_PATH=/usr/local/bin/lpac
-CMD ["go", "run", "./cmd/smshub"]
+COPY --from=api-build /out/smshub /usr/local/bin/smshub
+COPY --from=web-build --chown=smshub:smshub /src/web/dist/ /app/web/
+
+USER smshub
+WORKDIR /app
+ENV SMS_HUB_API_ADDR=:8080 \
+    SMS_HUB_MQTT_ADDR=:1883 \
+    SMS_HUB_DB_PATH=/data/smshub.db \
+    SMS_HUB_WEB_DIR=/app/web \
+    LPAC_PATH=/usr/local/bin/lpac
+VOLUME ["/data"]
+EXPOSE 8080 1883
+ENTRYPOINT ["/usr/local/bin/smshub"]

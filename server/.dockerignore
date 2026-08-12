@@ -1,0 +1,13 @@
+.git
+.gitignore
+api/Dockerfile*
+api/**/*.test
+apprise/attach
+apprise/config
+apprise/plugin
+data
+smshub
+tools
+web/dist
+web/node_modules
+npm-debug.log*

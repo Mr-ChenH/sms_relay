@@ -15,6 +15,7 @@ import (
 	"sms-forwarding/server/api/internal/model"
 	"sms-forwarding/server/api/internal/notify"
 	"sms-forwarding/server/api/internal/store"
+	"sms-forwarding/server/api/internal/webui"
 )
 
 type Server struct {
@@ -71,6 +72,13 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("PUT /api/admin/esim/subscriptions/{id}", s.updateEsimSubscription)
 	mux.HandleFunc("GET /api/admin/logs", s.logs)
 	mux.HandleFunc("GET /api/admin/audit", s.audit)
+
+	webDir := strings.TrimSpace(os.Getenv("SMS_HUB_WEB_DIR"))
+	if webDir != "" {
+		if webHandler, ok := webui.Handler(webDir); ok {
+			mux.Handle("/", webHandler)
+		}
+	}
 
 	return cors(mux)
 }
