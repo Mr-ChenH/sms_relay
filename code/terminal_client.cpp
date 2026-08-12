@@ -23,6 +23,7 @@ static const unsigned long REGISTER_INTERVAL_MS = 300000;
 static const unsigned long HEARTBEAT_INTERVAL_MS = 5000;
 static const unsigned long LOG_FLUSH_INTERVAL_MS = 15000;
 static const unsigned long MQTT_RECONNECT_INTERVAL_MS = 5000;
+static const uint16_t MQTT_KEEPALIVE_SECONDS = 20;
 static const unsigned long ESIM_PROFILE_SYNC_INTERVAL_MS = 300000;
 static const unsigned long IDENTITY_REFRESH_INTERVAL_MS = 300000;
 static const unsigned long IDENTITY_SETTLE_INTERVAL_MS = 10000;
@@ -659,7 +660,7 @@ static bool ensureMqttConnected() {
   mqttClient.setServer(host.c_str(), port);
   mqttClient.setCallback(mqttCallback);
   mqttClient.setBufferSize(4096);
-  mqttClient.setKeepAlive(120);
+  mqttClient.setKeepAlive(MQTT_KEEPALIVE_SECONDS);
   mqttClient.setSocketTimeout(5);
 
   String clientId = terminalDeviceID();
@@ -733,7 +734,7 @@ void terminalClientInit() {
 }
 
 void terminalClientService() {
-  if (!terminalClientEnabled() || WiFi.status() != WL_CONNECTED || commandExecuting) return;
+  if (!terminalClientEnabled() || WiFi.status() != WL_CONNECTED) return;
   bool mqttReady = ensureMqttConnected();
   if (mqttReady) mqttClient.loop();
   if (mqttReady) flushSMSQueue();

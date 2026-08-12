@@ -230,6 +230,7 @@ bool sendSMS(const char* phoneNumber, const char* message) {
   unsigned long start = millis();
   bool gotPrompt = false;
   while (millis() - start < 5000) {
+    terminalClientService();
     if (Serial1.available()) {
       char c = Serial1.read();
       logCapture(String(c));
@@ -254,6 +255,7 @@ bool sendSMS(const char* phoneNumber, const char* message) {
   start = millis();
   String resp = "";
   while (millis() - start < 30000) {
+    terminalClientService();
     while (Serial1.available()) {
       char c = Serial1.read();
       resp += c;

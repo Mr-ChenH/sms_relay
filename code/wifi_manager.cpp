@@ -24,6 +24,7 @@ static const char* BLE_STATUS_CHAR_UUID = "7d6d0003-5f36-4f64-8f2b-ec2a7b3d0101"
 static bool provisioningStarted = false;
 static bool pendingCredentials = false;
 static bool pendingTerminalConfig = false;
+static volatile bool wifiConnectionLost = false;
 static String pendingSSID;
 static String pendingPassword;
 static BLECharacteristic* statusCharacteristic = nullptr;
@@ -110,6 +111,7 @@ static void onWiFiEvent(arduino_event_t* event) {
       setBLEStatus(String("connected:") + WiFi.localIP().toString());
       break;
     case ARDUINO_EVENT_WIFI_STA_DISCONNECTED:
+      wifiConnectionLost = true;
       logCaptureLn(String("WiFi 已断开"));
       if (WiFi.status() != WL_CONNECTED) setBLEStatus("wifi_disconnected");
       break;
@@ -276,6 +278,11 @@ static void beginCustomBLEProvisioning() {
 }
 
 static void applyPendingConfiguration() {
+  if (wifiConnectionLost) {
+    wifiConnectionLost = false;
+    terminalClientConfigChanged();
+  }
+
   if (pendingTerminalConfig) {
     pendingTerminalConfig = false;
     terminalClientConfigChanged();
