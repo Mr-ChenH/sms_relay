@@ -63,10 +63,10 @@
 │  HTTP API :8080       内置 MQTT Broker :1883       │
 │  SQLite 持久化        命令队列 / 调度 / 审计       │
 └──────────────┬───────────────────────┬─────────────┘
-               │                       │ HTTP
+               │                       │ HTTP（可选）
                │ /api                  ▼
                │              ┌───────────────────┐
-               │              │ Apprise API :8000 │
+               │              │ 外部 Apprise API  │
                │              │ Bark / Telegram   │
                │              │ 邮件 / ntfy / ... │
                │              └───────────────────┘
@@ -90,36 +90,17 @@
 
 ## 快速开始
 
-最快的部署方式是使用 Docker Compose 拉取 `xmoli/sms-relay:latest`。生产镜像已包含 Go API、Vue 管理台、内置 MQTT Broker 和 lpac；Compose 另外启动 Apprise API。
+最快的部署方式是使用 Docker Compose 拉取 `xmoli/sms-relay:latest`。生产镜像已包含 Go API、Vue 管理台、内置 MQTT Broker 和 lpac。Apprise 是可选的外部通知服务，不随默认 Compose 启动。
 
 ### 前置条件
 
 - Docker Engine 及 Docker Compose v2
 - 可被 ESP32 访问的局域网 IP
-- 空闲端口：`8080`、`1883`、`8000`
+- 空闲端口：`8080`、`1883`
 
-### 1. 配置服务端可访问地址
+### 1. 确认服务端地址
 
-ESP32 不能访问服务器容器中的 `localhost`。启动前将下面的 IP 替换为运行 Docker 的主机局域网 IP：
-
-```bash
-cd server
-
-# Linux/macOS
-export SMS_HUB_PUBLIC_BASE_URL=http://192.168.1.10:8080
-export SMS_HUB_PUBLIC_MQTT_BROKER=mqtt://192.168.1.10:1883
-
-# PowerShell
-$env:SMS_HUB_PUBLIC_BASE_URL = "http://192.168.1.10:8080"
-$env:SMS_HUB_PUBLIC_MQTT_BROKER = "mqtt://192.168.1.10:1883"
-```
-
-也可以在 `server/` 下创建 `.env`：
-
-```dotenv
-SMS_HUB_PUBLIC_BASE_URL=http://192.168.1.10:8080
-SMS_HUB_PUBLIC_MQTT_BROKER=mqtt://192.168.1.10:1883
-```
+ESP32 不能访问服务器容器中的 `localhost`。记录运行 Docker 的主机局域网 IP，例如 `192.168.1.10`；后续通过 BLE 将这个主机地址写入终端。管理台中的公开配置默认根据浏览器访问地址自动推导，无需在 Compose 中设置环境变量。
 
 ### 2. 从 Docker Hub 启动
 
@@ -136,13 +117,14 @@ docker compose up -d
 docker compose -f docker-compose.build.yml up -d --build
 ```
 
-两种方式使用相同的服务端口和 `sms-hub-data` 数据卷，不要同时启动。启动后访问：
+两种方式使用相同的服务端口和 `server/data` 数据目录，不要同时启动。启动后访问：
 
 | 服务 | 地址 | 用途 |
 | --- | --- | --- |
 | Web 管理台与 API | <http://localhost:8080> | 日常管理入口、管理 API 与健康检查 |
 | MQTT Broker | `mqtt://localhost:1883` | ESP32 终端通信 |
-| Apprise API | <http://localhost:8000> | 通知渠道配置与发送 |
+
+默认 Compose 不启动 Apprise；需要通知转发时可另行部署 Apprise API 并在管理台配置服务地址。
 
 健康检查：
 
@@ -150,11 +132,9 @@ docker compose -f docker-compose.build.yml up -d --build
 curl http://localhost:8080/api/health
 ```
 
-SQLite 数据默认保存在 Docker 命名卷 `sms-hub-data` 中。查看实际卷名：
+SQLite 数据默认保存在 Compose 文件同级的 `data/smshub.db` 中，宿主机可以直接查看和备份。容器入口会在首次启动时创建目录、修正绑定挂载权限，然后降权运行应用，无需手动执行 `mkdir`、`chown` 或 `chmod`。
 
-```bash
-docker volume ls | grep sms-hub-data
-```
+> 自动权限初始化由当前镜像入口提供。升级旧部署时请先执行 `docker compose pull`；如果显式设置了 Compose `user:`，请删除该设置，否则入口无法修正挂载目录权限。
 
 停止服务：
 
@@ -162,7 +142,7 @@ docker volume ls | grep sms-hub-data
 docker compose down
 ```
 
-> `docker compose down` 不会删除 SQLite 数据卷；不要使用 `docker compose down -v`，除非确定要删除数据库。备份系统时应同时备份该数据卷和 `server/apprise/` 下的配置。
+> `docker compose down` 不会删除 `data/` 下的 SQLite 数据。备份系统时应备份该目录；使用 Apprise 时还应备份其配置。
 
 ## 硬件准备与接线
 
@@ -367,7 +347,7 @@ SSID|PASSWORD|mqtt://broker.example.com:1883|USERNAME|PASSWORD
 
 ## 消息分发
 
-SMS Hub 使用自托管 [Apprise API](https://github.com/caronc/apprise-api) 统一连接通知服务。实际可用渠道由 Apprise 支持范围和你的 Apprise 配置决定，例如 Bark、Telegram、邮件、ntfy、Gotify、飞书兼容 Webhook 等。
+SMS Hub 可选使用自托管 [Apprise API](https://github.com/caronc/apprise-api) 连接通知服务。默认 Compose 不包含 Apprise；不部署时只影响通知转发，短信接收、入库、管理和发送等核心功能仍可正常使用。实际可用渠道由 Apprise 支持范围和你的 Apprise 配置决定，例如 Bark、Telegram、邮件、ntfy、Gotify、飞书兼容 Webhook 等。
 
 配置顺序：
 
@@ -395,7 +375,7 @@ SMS Hub 使用自托管 [Apprise API](https://github.com/caronc/apprise-api) 统
 {{timestamp}}  接收时间
 ```
 
-不要将 Apprise URL、Token、Webhook 密钥或 SMTP 密码提交到 Git。`server/apprise/` 仅用于本地挂载配置。
+不要将 Apprise URL、Token、Webhook 密钥或 SMTP 密码提交到 Git。`server/apprise/` 仅供单独部署 Apprise 时保存本地挂载配置，默认 Compose 不使用该目录。
 
 ## MCP 服务
 
@@ -602,7 +582,7 @@ sms_forwarding/
 ├── server/
 │   ├── api/                      Go HTTP API、MQTT Bridge、Broker、SQLite
 │   ├── web/                      Vue 3 + TypeScript + Vite 管理台
-│   ├── apprise/                  Apprise 配置挂载目录
+│   ├── apprise/                  可选的外部 Apprise 本地配置
 │   ├── data/                     SQLite 数据目录
 │   ├── docker-compose.yml        使用 Docker Hub 镜像部署
 │   ├── docker-compose.build.yml  从当前源码构建部署
@@ -618,16 +598,31 @@ sms_forwarding/
 
 ## 故障排查
 
+### 数据库无法打开或显示只读
+
+当前镜像会在启动时自动初始化 `./data:/data` 的所有权，然后以 UID/GID `10001` 运行应用。如果日志出现 `unable to open database file` 或 `attempt to write a readonly database`：
+
+1. 执行 `docker compose pull`，确认使用包含自动权限初始化入口的最新镜像。
+2. 检查 Compose 中没有设置 `user:` 或 `read_only: true`。
+3. 检查挂载保持为 `./data:/data`，且宿主文件系统允许容器 root 执行 `chown`。
+4. 执行 `docker compose up -d --force-recreate` 后重新查看日志。
+
+正常部署不需要手动创建 `data/smshub.db`，也不需要在宿主机运行 `chown` 或 `chmod`。
+
 ### 管理台显示公开地址为 localhost
 
-ESP32 无法访问服务器自己的 `localhost`。设置：
+不要通过 `http://localhost:8080` 打开管理台，改用 ESP32 可访问的服务器地址，例如 `http://192.168.1.10:8080`。服务端会根据浏览器请求地址自动推导公开 API 和 MQTT 地址。
 
-```bash
-SMS_HUB_PUBLIC_BASE_URL=http://服务器局域网IP:8080
-SMS_HUB_PUBLIC_MQTT_BROKER=mqtt://服务器局域网IP:1883
+只有在反向代理导致自动推导不正确时，才需要为 API 容器额外设置：
+
+```yaml
+environment:
+  TZ: "${TZ:-Asia/Shanghai}"
+  SMS_HUB_PUBLIC_BASE_URL: "http://服务器局域网IP:8080"
+  SMS_HUB_PUBLIC_MQTT_BROKER: "mqtt://服务器局域网IP:1883"
 ```
 
-然后重启 API/Compose。
+修改后重启 Compose。
 
 ### 管理台能打开，但终端始终离线
 
@@ -647,8 +642,8 @@ SMS_HUB_PUBLIC_MQTT_BROKER=mqtt://服务器局域网IP:1883
 
 按顺序检查：
 
-1. Apprise 容器是否运行。
-2. Apprise 服务测试是否成功。
+1. 外部 Apprise API 是否已经单独部署并可访问。
+2. SMS Hub 中配置的 Apprise 服务地址是否正确，连接测试是否成功。
 3. Target 的 Config Key 和 Tags 是否存在。
 4. Target 是否启用。
 5. 路由规则是否匹配发送方、关键词、终端和标签。
@@ -688,7 +683,7 @@ SMS_HUB_PUBLIC_MQTT_BROKER=mqtt://服务器局域网IP:1883
 
 - 管理 API 尚未实现管理员认证和角色权限。
 - MQTT 默认可无认证运行。
-- Docker Compose 默认将 API、MQTT、Web 和 Apprise 端口暴露到主机。
+- Docker Compose 默认将 API、MQTT 和 Web 端口暴露到主机；另行部署 Apprise 时也应限制其访问范围。
 - AT 指令、飞行模式、硬重启、Profile 删除和短信发送属于敏感操作。
 
 不要在未增加保护的情况下直接暴露到公网。生产部署至少应：
@@ -696,7 +691,7 @@ SMS_HUB_PUBLIC_MQTT_BROKER=mqtt://服务器局域网IP:1883
 1. 使用防火墙限制来源 IP。
 2. 在 Web/API 前增加 HTTPS 反向代理和身份认证。
 3. 为 MQTT 启用 TLS、用户名、密码和 ACL；仅允许 API 使用终端 APDU request topic。
-4. Docker 部署需保护 `sms-hub-data` 数据卷；原生部署需保护 `server/data/smshub.db`；两种方式都要保护 Apprise 配置目录。
+4. Docker 部署需保护 `server/data/smshub.db`；原生部署同样需要保护实际配置的数据库文件；使用 Apprise 时还要保护其配置目录。
 5. 定期备份 SQLite 与通知配置。
 6. 不在日志、Issue 或截图中公开短信内容、激活码、Webhook 和 Token。
 

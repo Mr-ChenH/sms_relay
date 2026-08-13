@@ -6,38 +6,9 @@ services:
     image: sms-relay:local
     restart: unless-stopped
     environment:
-      SMS_HUB_API_ADDR: ":8080"
-      APPRISE_BASE_URL: "http://apprise:8000"
-      SMS_HUB_DB_PATH: "/data/smshub.db"
-      SMS_HUB_PUBLIC_BASE_URL: "${SMS_HUB_PUBLIC_BASE_URL:-http://192.168.1.10:8080}"
-      SMS_HUB_PUBLIC_MQTT_BROKER: "${SMS_HUB_PUBLIC_MQTT_BROKER:-mqtt://192.168.1.10:1883}"
-      LPAC_PATH: "/usr/local/bin/lpac"
       TZ: "${TZ:-Asia/Shanghai}"
-      SMS_HUB_MCP_TOKEN: "${SMS_HUB_MCP_TOKEN:-}"
-      SMS_HUB_MCP_ALLOW_WRITE: "${SMS_HUB_MCP_ALLOW_WRITE:-false}"
     ports:
       - "8080:8080"
       - "1883:1883"
     volumes:
-      - sms-hub-data:/data
-    depends_on:
-      - apprise
-
-  apprise:
-    image: caronc/apprise:latest
-    container_name: sms-hub-apprise
-    restart: unless-stopped
-    ports:
-      - "8000:8000"
-    environment:
-      APPRISE_STATEFUL_MODE: simple
-      APPRISE_WORKER_COUNT: "1"
-      APPRISE_ADMIN: "y"
-      TZ: "${TZ:-Asia/Shanghai}"
-    volumes:
-      - ./apprise/config:/config
-      - ./apprise/plugin:/plugin
-      - ./apprise/attach:/attach
-
-volumes:
-  sms-hub-data:
+      - ./data:/data

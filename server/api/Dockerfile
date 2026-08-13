@@ -32,9 +32,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates
     && chown -R smshub:smshub /app /data
 COPY --from=lpac-build /usr/local/ /usr/local/
 COPY --from=api-build /out/smshub /usr/local/bin/smshub
+COPY api/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 COPY --from=web-build --chown=smshub:smshub /src/web/dist/ /app/web/
+RUN chmod 0755 /usr/local/bin/docker-entrypoint.sh
 
-USER smshub
 WORKDIR /app
 ENV SMS_HUB_API_ADDR=:8080 \
     SMS_HUB_MQTT_ADDR=:1883 \
@@ -43,4 +44,5 @@ ENV SMS_HUB_API_ADDR=:8080 \
     LPAC_PATH=/usr/local/bin/lpac
 VOLUME ["/data"]
 EXPOSE 8080 1883
-ENTRYPOINT ["/usr/local/bin/smshub"]
+ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
+CMD ["/usr/local/bin/smshub"]

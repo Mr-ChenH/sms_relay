@@ -8,8 +8,8 @@ Go API + Vue 3 management console for the centralized SMS/eSIM hub.
 server/
   api/       Go HTTP API service
   web/       Vue 3 + Vite management console
-  apprise/   self-hosted Apprise API config/plugin/attach volumes
-  data/      SQLite database files
+  apprise/   optional configuration files for a separately deployed Apprise API
+  data/      bind-mounted SQLite database directory
 ```
 
 ## Run With Docker Compose
@@ -33,15 +33,18 @@ cd server
 docker compose -f docker-compose.build.yml up -d --build
 ```
 
-Both configurations expose the same services and use the same `sms-hub-data` volume, so do not run them at the same time.
+Both configurations expose the same ports and use the same `server/data` bind-mounted directory, so do not run them at the same time.
 
 Services:
 
 - SMS Hub Web and API: `http://localhost:8080`
 - Embedded MQTT broker: `mqtt://localhost:1883`
-- Apprise API: `http://localhost:8000`
 
-The Go API calls Apprise through `APPRISE_BASE_URL=http://apprise:8000`. API data is persisted in the Docker `sms-hub-data` named volume.
+The default Compose deployment does not start Apprise. Configure a separately deployed Apprise API in the management console when notification forwarding is needed.
+
+API data is persisted in the bind-mounted `server/data` directory, so the SQLite files remain directly visible on the host. The image starts through a root entrypoint that creates `/data`, repairs ownership when necessary, and then drops privileges to UID/GID `10001` before starting SMS Hub. A fresh deployment therefore only requires `docker compose pull` followed by `docker compose up -d`; do not manually create `smshub.db` or run `chown`.
+
+When upgrading an older deployment, pull the current image before starting it. Do not set Compose `user:`, because the entrypoint needs its initial root process to initialize bind-mount permissions.
 
 ## Run API Locally
 
