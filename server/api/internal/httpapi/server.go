@@ -44,6 +44,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/admin/dashboard", s.dashboard)
 	mux.HandleFunc("GET /api/admin/public-config", s.publicConfig)
 	mux.HandleFunc("GET /api/admin/devices", s.devices)
+	mux.HandleFunc("PUT /api/admin/devices/{id}", s.updateDevice)
 	mux.HandleFunc("GET /api/admin/sms", s.sms)
 	mux.HandleFunc("POST /api/admin/outbound-sms", s.sendSMS)
 	mux.HandleFunc("GET /api/admin/commands", s.commands)
@@ -64,12 +65,14 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("PUT /api/admin/routing-rules/{id}", s.updateRule)
 	mux.HandleFunc("DELETE /api/admin/routing-rules/{id}", s.deleteRule)
 	mux.HandleFunc("GET /api/admin/esim/profiles", s.esimProfiles)
+	mux.HandleFunc("PUT /api/admin/esim/profiles/{id}", s.updateEsimProfile)
 	mux.HandleFunc("GET /api/admin/esim/capabilities", s.esimCapabilities)
 	mux.HandleFunc("GET /api/admin/esim/tasks", s.esimTasks)
 	mux.HandleFunc("POST /api/admin/esim/tasks", s.createEsimTask)
 	mux.HandleFunc("GET /api/admin/esim/subscriptions", s.esimSubscriptions)
 	mux.HandleFunc("POST /api/admin/esim/subscriptions", s.createEsimSubscription)
 	mux.HandleFunc("PUT /api/admin/esim/subscriptions/{id}", s.updateEsimSubscription)
+	mux.HandleFunc("DELETE /api/admin/esim/subscriptions/{id}", s.deleteEsimSubscription)
 	mux.HandleFunc("GET /api/admin/logs", s.logs)
 	mux.HandleFunc("GET /api/admin/audit", s.audit)
 
@@ -105,6 +108,23 @@ func (s *Server) publicConfig(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) devices(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, model.APIResponse{Success: true, Data: s.store.Devices()})
+}
+
+func (s *Server) updateDevice(w http.ResponseWriter, r *http.Request) {
+	var req model.UpdateDeviceRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	device, err := s.store.UpdateDevice(strings.TrimSpace(r.PathValue("id")), req)
+	if err != nil {
+		status := http.StatusBadRequest
+		if err.Error() == "device not found" {
+			status = http.StatusNotFound
+		}
+		writeJSON(w, status, model.APIResponse{Success: false, Error: err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, model.APIResponse{Success: true, Data: device})
 }
 
 func (s *Server) sms(w http.ResponseWriter, r *http.Request) {
@@ -354,6 +374,19 @@ func (s *Server) esimProfiles(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, model.APIResponse{Success: true, Data: s.store.EsimProfiles()})
 }
 
+func (s *Server) updateEsimProfile(w http.ResponseWriter, r *http.Request) {
+	var req model.UpdateEsimProfileRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	profile, err := s.store.UpdateEsimProfile(strings.TrimSpace(r.PathValue("id")), req)
+	if err != nil {
+		writeJSON(w, http.StatusNotFound, model.APIResponse{Success: false, Error: err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, model.APIResponse{Success: true, Data: profile})
+}
+
 func (s *Server) esimTasks(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, model.APIResponse{Success: true, Data: s.store.EsimTasks()})
 }
@@ -419,6 +452,18 @@ func (s *Server) updateEsimSubscription(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	writeJSON(w, http.StatusOK, model.APIResponse{Success: true, Data: sub})
+}
+
+func (s *Server) deleteEsimSubscription(w http.ResponseWriter, r *http.Request) {
+	if err := s.store.DeleteEsimSubscription(strings.TrimSpace(r.PathValue("id"))); err != nil {
+		status := http.StatusBadRequest
+		if err.Error() == "subscription not found" {
+			status = http.StatusNotFound
+		}
+		writeJSON(w, status, model.APIResponse{Success: false, Error: err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, model.APIResponse{Success: true, Data: map[string]string{"status": "deleted"}})
 }
 
 func (s *Server) logs(w http.ResponseWriter, r *http.Request) {

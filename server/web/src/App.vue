@@ -5,6 +5,7 @@ import AppShell from './components/AppShell.vue'
 import PaginationBar from './components/PaginationBar.vue'
 import AuditPage from './pages/AuditPage.vue'
 import DevicesPage from './pages/DevicesPage.vue'
+import EsimProfilesPage from './pages/EsimProfilesPage.vue'
 import LogsPage from './pages/LogsPage.vue'
 import OverviewPage from './pages/OverviewPage.vue'
 import SendSmsPage from './pages/SendSmsPage.vue'
@@ -18,11 +19,13 @@ const refreshing = ref(false)
 const error = ref('')
 const dashboard = ref<Dashboard | null>(null)
 const devices = ref<Device[]>([])
+const deviceSavingId = ref('')
 const sms = ref<SMSList | null>(null)
 const channels = ref<AppriseTarget[]>([])
 const appriseServices = ref<AppriseService[]>([])
 const rules = ref<RoutingRule[]>([])
 const profiles = ref<EsimProfile[]>([])
+const profileSavingId = ref('')
 const esimTasks = ref<EsimTask[]>([])
 const esimCapabilities = ref<EsimCapabilities>({ profileDownload: false, platform: '', reason: '正在检查服务端能力' })
 const esimSubscriptions = ref<EsimSubscription[]>([])
@@ -99,6 +102,7 @@ const esimQrInput = ref<HTMLInputElement | null>(null)
 const sendResult = ref<CommandResult | null>(null)
 const showEsimSubscriptionDialog = ref(false)
 const editingEsimSubscriptionId = ref('')
+const deletingEsimSubscriptionId = ref('')
 const showAppriseForm = ref(false)
 const showAppriseServiceForm = ref(false)
 const showRoutingRuleForm = ref(false)
@@ -144,6 +148,19 @@ function applyDeviceDefaults(devs = devices.value) {
 async function loadDevices() {
   devices.value = await api.get<Device[]>('/api/admin/devices')
   applyDeviceDefaults()
+}
+
+async function renameDevice(device: Device, name: string) {
+  deviceSavingId.value = device.id
+  error.value = ''
+  try {
+    const updated = await api.put<Device>(`/api/admin/devices/${device.id}`, { name })
+    devices.value = devices.value.map((item) => item.id === updated.id ? updated : item)
+  } catch (err) {
+    error.value = err instanceof Error ? err.message : '终端名称保存失败'
+  } finally {
+    deviceSavingId.value = ''
+  }
 }
 
 async function loadOverview() {
@@ -217,6 +234,32 @@ async function refreshEsimOperations() {
   }
 }
 
+async function loadProfileManagementPage() {
+  const [devs, esimProfiles, subscriptions] = await Promise.all([
+    api.get<Device[]>('/api/admin/devices'),
+    api.get<EsimProfile[]>('/api/admin/esim/profiles'),
+    api.get<EsimSubscription[]>('/api/admin/esim/subscriptions')
+  ])
+  devices.value = devs
+  applyDeviceDefaults(devs)
+  profiles.value = esimProfiles
+  esimSubscriptions.value = subscriptions
+}
+
+async function saveProfileMetadata(profile: EsimProfile, country: string, phoneNumber: string) {
+  profileSavingId.value = profile.id
+  error.value = ''
+  try {
+    const updated = await api.put<EsimProfile>(`/api/admin/esim/profiles/${profile.id}`, { country, phoneNumber })
+    profiles.value = profiles.value.map((item) => item.id === updated.id ? updated : item)
+    esimSubscriptions.value = await api.get<EsimSubscription[]>('/api/admin/esim/subscriptions')
+  } catch (err) {
+    error.value = err instanceof Error ? err.message : 'Profile 信息保存失败'
+  } finally {
+    profileSavingId.value = ''
+  }
+}
+
 async function loadSubscriptionsPage() {
   const [devs, esimProfiles, subscriptions, targets] = await Promise.all([
     api.get<Device[]>('/api/admin/devices'),
@@ -264,6 +307,9 @@ async function loadPageData(target: Page) {
       break
     case 'esim':
       await loadEsimPage()
+      break
+    case 'esim-profiles':
+      await loadProfileManagementPage()
       break
     case 'esim-subscriptions':
       await loadSubscriptionsPage()
@@ -760,6 +806,27 @@ function openEsimSubscriptionDialog() {
   showEsimSubscriptionDialog.value = true
 }
 
+async function deleteEsimSubscription(sub: EsimSubscription) {
+  const label = sub.profileName || sub.iccid
+  if (!window.confirm(`确认删除 ${label} 的订阅保活策略？\n\n删除后将停止后续提醒和保活调度，历史执行记录会保留。`)) return
+  deletingEsimSubscriptionId.value = sub.id
+  esimSubscriptionResult.value = ''
+  error.value = ''
+  try {
+    await api.delete<{ status: string }>(`/api/admin/esim/subscriptions/${sub.id}`)
+    esimSubscriptions.value = esimSubscriptions.value.filter((item) => item.id !== sub.id)
+    if (editingEsimSubscriptionId.value === sub.id) {
+      showEsimSubscriptionDialog.value = false
+      editingEsimSubscriptionId.value = ''
+    }
+    esimSubscriptionResult.value = `已删除 ${label} 的订阅保活策略`
+  } catch (err) {
+    error.value = err instanceof Error ? err.message : '订阅策略删除失败'
+  } finally {
+    deletingEsimSubscriptionId.value = ''
+  }
+}
+
 function editEsimSubscription(sub: EsimSubscription) {
   editingEsimSubscriptionId.value = sub.id
   subscriptionDialogDeviceId.value = sub.deviceId
@@ -852,7 +919,9 @@ onBeforeUnmount(() => {
 
         <OverviewPage v-if="!loading && page === 'overview' && dashboard" :dashboard="dashboard" @open-routes="page = 'routes'" @open-sms="page = 'sms'" />
 
-        <DevicesPage v-if="!loading && page === 'devices'" :devices="devices" @open-tools="(deviceId?: string) => { if (deviceId) toolDeviceId = deviceId; page = 'tools' }" @open-esim="(deviceId: string) => { selectedEsimDeviceId = deviceId; page = 'esim' }" />
+        <DevicesPage v-if="!loading && page === 'devices'" :devices="devices" :saving-id="deviceSavingId" @rename="renameDevice" @open-tools="(deviceId?: string) => { if (deviceId) toolDeviceId = deviceId; page = 'tools' }" @open-esim="(deviceId: string) => { selectedEsimDeviceId = deviceId; page = 'esim' }" />
+
+        <EsimProfilesPage v-if="!loading && page === 'esim-profiles'" :profiles="profiles" :devices="devices" :subscriptions="esimSubscriptions" :saving-id="profileSavingId" @refresh="loadAll" @save="saveProfileMetadata" />
 
         <section v-if="!loading && page === 'sms' && sms" class="page">
           <div class="page-head"><div><h1>历史短信</h1><p>查看全部历史短信，支持搜索、分页、详情和分发记录。</p></div><button class="btn" @click="exportCurrentSms">导出当前页</button></div>
@@ -1003,8 +1072,8 @@ onBeforeUnmount(() => {
         <section v-if="!loading && page === 'esim-subscriptions'" class="page">
           <div class="page-head"><div><h1>订阅保活</h1><p>查看全部 eSIM 充值与短信保活策略。</p></div><button class="btn primary" @click="openEsimSubscriptionDialog">新增订阅策略</button></div>
           <div v-if="esimSubscriptionResult" class="alert success top-gap">{{ esimSubscriptionResult }}</div>
-          <div class="card top-gap"><div class="card-head"><b>全部订阅保活</b><button class="btn small" @click="loadAll()">刷新</button></div><table><thead><tr><th>终端</th><th>号码 / Profile</th><th>国家/地区</th><th>策略类型</th><th>开始时间</th><th>执行周期</th><th>策略参数</th><th>提醒渠道</th><th>下次执行</th><th>状态</th><th>操作</th></tr></thead><tbody><tr v-for="sub in esimSubscriptions" :key="sub.id"><td><b>{{ sub.deviceName }}</b><small class="mono">{{ sub.deviceId }}</small></td><td><b>{{ sub.profileName }}</b><small class="mono">{{ sub.iccid }}</small><small>{{ sub.note || '-' }}</small></td><td>{{ sub.country || '-' }}</td><td>{{ sub.type === 'recharge' ? '充值提醒' : '短信保活' }}</td><td>{{ formatTime(sub.startAt) }}</td><td>{{ sub.intervalDays }} 天</td><td><template v-if="sub.type === 'recharge'">{{ sub.rechargeAmount || '-' }}</template><template v-else>{{ sub.keepaliveNumber || '-' }} / {{ sub.keepaliveMessage || '-' }}</template></td><td>{{ (sub.targetIds || []).map((id) => channels.find((target) => target.id === id)?.name || id).join('、') || '全部启用渠道（兼容）' }}</td><td>{{ formatTime(sub.nextRunAt) }}</td><td><span :class="['status', statusClass(sub.enabled ? sub.status : 'disabled')]">{{ sub.enabled ? sub.status : 'disabled' }}</span></td><td><button class="btn small primary" @click="editEsimSubscription(sub)">编辑</button></td></tr><tr v-if="esimSubscriptions.length === 0"><td colspan="11" class="muted">暂无订阅保活策略。</td></tr></tbody></table></div>
-          <div v-if="showEsimSubscriptionDialog" class="modal-backdrop" @click.self="showEsimSubscriptionDialog = false"><form class="card form modal" @submit.prevent="saveEsimSubscription"><div class="card-head"><b>{{ editingEsimSubscriptionId ? '编辑订阅策略' : '新增订阅策略' }}</b><button class="btn small" type="button" @click="showEsimSubscriptionDialog = false">关闭</button></div><label>终端</label><select class="field" :value="subscriptionDialogDeviceId" :disabled="!!editingEsimSubscriptionId" @change="selectSubscriptionDialogDevice(($event.target as HTMLSelectElement).value)" required><option v-for="device in devices" :key="device.id" :value="device.id">{{ device.name }} / {{ device.eid }} / {{ device.status }}</option></select><label>号码 / Profile</label><select v-model="esimSubscriptionForm.profileId" class="field" :disabled="!!editingEsimSubscriptionId" required><option v-for="profile in editingEsimSubscriptionId ? subscriptionDialogProfiles : availableSubscriptionDialogProfiles" :key="profile.id" :value="profile.id">{{ profileOptionLabel(profile) }}</option></select><div v-if="subscriptionDialogSelectedProfile" class="subscription-profile-summary"><div><span>Profile</span><b>{{ subscriptionDialogSelectedProfile.nickname || subscriptionDialogSelectedProfile.profileName || subscriptionDialogSelectedProfile.provider || '-' }}</b></div><div><span>运营商</span><b>{{ subscriptionDialogSelectedProfile.provider || '-' }}</b></div><div><span>ICCID</span><b class="mono">{{ subscriptionDialogSelectedProfile.iccid }}</b></div><div><span>当前号码</span><b class="mono">{{ subscriptionDialogSelectedProfile.state === 'enabled' ? subscriptionDialogDevice?.phoneNumber || '-' : '非当前启用 Profile' }}</b></div></div><label>策略类型</label><select v-model="esimSubscriptionForm.type" class="field"><option value="recharge">充值提醒</option><option value="sms_keepalive">短信保活</option></select><label>开始时间</label><input v-model="esimSubscriptionForm.startAt" class="field" type="datetime-local" required><label>执行间隔（天）</label><input v-model.number="esimSubscriptionForm.intervalDays" class="field" type="number" min="1"><template v-if="esimSubscriptionForm.type === 'recharge'"><label>充值金额/套餐</label><input v-model="esimSubscriptionForm.rechargeAmount" class="field" placeholder="20 CNY"></template><template v-else><label>保活短信号码</label><input v-model="esimSubscriptionForm.keepaliveNumber" class="field" placeholder="10086" required><label>保活短信内容</label><input v-model="esimSubscriptionForm.keepaliveMessage" class="field" placeholder="CXLL" required></template><label>消息提醒 Target</label><select v-model="esimSubscriptionForm.targetIds" class="field" multiple required><option v-for="target in channels.filter((item) => item.enabled)" :key="target.id" :value="target.id">{{ target.name }} / {{ target.serviceName }} / {{ target.configKey }}</option></select><small v-if="channels.filter((item) => item.enabled).length === 0" class="muted">请先在消息分发中配置并启用 Apprise Target。</small><label>备注</label><textarea v-model="esimSubscriptionForm.note" placeholder="用途、套餐说明、注意事项"></textarea><label class="checkbox-row"><input v-model="esimSubscriptionForm.enabled" type="checkbox"> 启用策略</label><button class="btn primary" :disabled="!esimSubscriptionForm.profileId || esimSubscriptionForm.targetIds.length === 0">{{ editingEsimSubscriptionId ? '保存修改' : '保存订阅策略' }}</button></form></div>
+          <div class="card top-gap"><div class="card-head"><b>全部订阅保活</b><button class="btn small" @click="loadAll()">刷新</button></div><table><thead><tr><th>终端</th><th>号码 / Profile</th><th>国家/地区</th><th>策略类型</th><th>开始时间</th><th>执行周期</th><th>策略参数</th><th>提醒渠道</th><th>下次执行</th><th>状态</th><th>操作</th></tr></thead><tbody><tr v-for="sub in esimSubscriptions" :key="sub.id"><td><b>{{ sub.deviceName }}</b><small class="mono">{{ sub.deviceId }}</small></td><td><b>{{ sub.profileName }}</b><small class="mono">{{ sub.iccid }}</small><small>{{ sub.note || '-' }}</small></td><td>{{ sub.country || '-' }}</td><td>{{ sub.type === 'recharge' ? '充值提醒' : '短信保活' }}</td><td>{{ formatTime(sub.startAt) }}</td><td>{{ sub.intervalDays }} 天</td><td><template v-if="sub.type === 'recharge'">{{ sub.rechargeAmount || '-' }}</template><template v-else>{{ sub.keepaliveNumber || '-' }} / {{ sub.keepaliveMessage || '-' }}</template></td><td>{{ (sub.targetIds || []).map((id) => channels.find((target) => target.id === id)?.name || id).join('、') || '全部启用渠道（兼容）' }}</td><td>{{ formatTime(sub.nextRunAt) }}</td><td><span :class="['status', statusClass(sub.enabled ? sub.status : 'disabled')]">{{ sub.enabled ? sub.status : 'disabled' }}</span></td><td><div class="subscription-row-actions"><button class="btn small primary" @click="editEsimSubscription(sub)">编辑</button><button class="btn small danger" :disabled="deletingEsimSubscriptionId === sub.id" @click="deleteEsimSubscription(sub)">{{ deletingEsimSubscriptionId === sub.id ? '删除中' : '删除' }}</button></div></td></tr><tr v-if="esimSubscriptions.length === 0"><td colspan="11" class="muted">暂无订阅保活策略。</td></tr></tbody></table></div>
+          <div v-if="showEsimSubscriptionDialog" class="modal-backdrop" @click.self="showEsimSubscriptionDialog = false"><form class="card form modal" @submit.prevent="saveEsimSubscription"><div class="card-head"><b>{{ editingEsimSubscriptionId ? '编辑订阅策略' : '新增订阅策略' }}</b><button class="btn small" type="button" @click="showEsimSubscriptionDialog = false">关闭</button></div><label>终端</label><select class="field" :value="subscriptionDialogDeviceId" :disabled="!!editingEsimSubscriptionId" @change="selectSubscriptionDialogDevice(($event.target as HTMLSelectElement).value)" required><option v-for="device in devices" :key="device.id" :value="device.id">{{ device.name }} / {{ device.eid }} / {{ device.status }}</option></select><label>号码 / Profile</label><select v-model="esimSubscriptionForm.profileId" class="field" :disabled="!!editingEsimSubscriptionId" required><option v-for="profile in editingEsimSubscriptionId ? subscriptionDialogProfiles : availableSubscriptionDialogProfiles" :key="profile.id" :value="profile.id">{{ profileOptionLabel(profile) }}</option></select><div v-if="subscriptionDialogSelectedProfile" class="subscription-profile-summary"><div><span>Profile</span><b>{{ subscriptionDialogSelectedProfile.nickname || subscriptionDialogSelectedProfile.profileName || subscriptionDialogSelectedProfile.provider || '-' }}</b></div><div><span>运营商</span><b>{{ subscriptionDialogSelectedProfile.provider || '-' }}</b></div><div><span>ICCID</span><b class="mono">{{ subscriptionDialogSelectedProfile.iccid }}</b></div><div><span>当前号码</span><b class="mono">{{ subscriptionDialogSelectedProfile.state === 'enabled' ? subscriptionDialogDevice?.phoneNumber || '-' : '非当前启用 Profile' }}</b></div></div><label>策略类型</label><select v-model="esimSubscriptionForm.type" class="field"><option value="recharge">充值提醒</option><option value="sms_keepalive">短信保活</option></select><label>开始时间</label><input v-model="esimSubscriptionForm.startAt" class="field" type="datetime-local" required><label>执行间隔（天）</label><input v-model.number="esimSubscriptionForm.intervalDays" class="field" type="number" min="1"><template v-if="esimSubscriptionForm.type === 'recharge'"><label>充值金额/套餐</label><input v-model="esimSubscriptionForm.rechargeAmount" class="field" placeholder="20 CNY"></template><template v-else><label>保活短信号码</label><input v-model="esimSubscriptionForm.keepaliveNumber" class="field" placeholder="10086" required><label>保活短信内容</label><input v-model="esimSubscriptionForm.keepaliveMessage" class="field" placeholder="CXLL" required></template><label>消息提醒 Target</label><select v-model="esimSubscriptionForm.targetIds" class="field" multiple required><option v-for="target in channels.filter((item) => item.enabled)" :key="target.id" :value="target.id">{{ target.name }} / {{ target.serviceName }} / {{ target.configKey }}</option></select><small v-if="channels.filter((item) => item.enabled).length === 0" class="muted">请先在消息分发中配置并启用 Apprise Target。</small><label>备注</label><textarea v-model="esimSubscriptionForm.note" placeholder="用途、套餐说明、注意事项"></textarea><label class="checkbox-row"><input v-model="esimSubscriptionForm.enabled" type="checkbox"> 启用策略</label><div class="subscription-dialog-actions"><button v-if="editingEsimSubscriptionId" class="btn danger" type="button" :disabled="deletingEsimSubscriptionId === editingEsimSubscriptionId" @click="selectedSubscriptionConfig && deleteEsimSubscription(selectedSubscriptionConfig)">删除策略</button><span></span><button class="btn" type="button" @click="showEsimSubscriptionDialog = false">取消</button><button class="btn primary" :disabled="!esimSubscriptionForm.profileId || esimSubscriptionForm.targetIds.length === 0">{{ editingEsimSubscriptionId ? '保存修改' : '保存订阅策略' }}</button></div></form></div>
         </section>
 
         <ToolsPage v-if="!loading && page === 'tools'" v-model:device-id="toolDeviceId" v-model:at-command="toolATCommand" v-model:active-command-id="activeToolCommandId" :devices="devices" :commands="commands" :result="toolResult" @run-command="runDiagnosticCommand" @refresh="loadAll" />

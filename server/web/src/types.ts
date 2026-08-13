@@ -1,4 +1,4 @@
-export type Page = 'overview' | 'devices' | 'sms' | 'send' | 'routes' | 'esim' | 'esim-subscriptions' | 'tools' | 'logs' | 'audit'
+export type Page = 'overview' | 'devices' | 'sms' | 'send' | 'routes' | 'esim' | 'esim-profiles' | 'esim-subscriptions' | 'tools' | 'logs' | 'audit'
 
 export interface PublicConfig {
   apiBaseUrl: string
@@ -141,8 +141,12 @@ export interface EsimProfile {
   nickname: string
   provider: string
   country: string
+  phoneNumber: string
   profileName: string
   state: string
+  available: boolean
+  missingSince?: string
+  lastSeenAt: string
 }
 
 export interface EsimTaskEvent {

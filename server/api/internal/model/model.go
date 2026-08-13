@@ -25,6 +25,10 @@ type Device struct {
 	LastSeenAt      time.Time `json:"lastSeenAt"`
 }
 
+type UpdateDeviceRequest struct {
+	Name string `json:"name"`
+}
+
 type SMSMessage struct {
 	ID                string    `json:"id"`
 	TerminalMessageID string    `json:"terminalMessageId"`
@@ -117,15 +121,24 @@ type CreateRoutingRuleRequest struct {
 type UpdateRoutingRuleRequest = CreateRoutingRuleRequest
 
 type EsimProfile struct {
-	ID          string `json:"id"`
-	DeviceID    string `json:"deviceId"`
-	ICCID       string `json:"iccid"`
-	AID         string `json:"aid"`
-	Nickname    string `json:"nickname"`
-	Provider    string `json:"provider"`
+	ID           string    `json:"id"`
+	DeviceID     string    `json:"deviceId"`
+	ICCID        string    `json:"iccid"`
+	AID          string    `json:"aid"`
+	Nickname     string    `json:"nickname"`
+	Provider     string    `json:"provider"`
+	Country      string    `json:"country"`
+	PhoneNumber  string    `json:"phoneNumber"`
+	ProfileName  string    `json:"profileName"`
+	State        string    `json:"state"`
+	Available    bool      `json:"available"`
+	MissingSince time.Time `json:"missingSince,omitempty"`
+	LastSeenAt   time.Time `json:"lastSeenAt"`
+}
+
+type UpdateEsimProfileRequest struct {
 	Country     string `json:"country"`
-	ProfileName string `json:"profileName"`
-	State       string `json:"state"`
+	PhoneNumber string `json:"phoneNumber"`
 }
 
 type EsimTaskEvent struct {

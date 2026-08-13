@@ -732,6 +732,30 @@ func (s *Store) EsimProfiles() []model.EsimProfile {
 	return append([]model.EsimProfile{}, s.esimProfiles...)
 }
 
+func (s *Store) UpdateEsimProfile(id string, req model.UpdateEsimProfileRequest) (model.EsimProfile, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	defer s.persistLocked()
+
+	for i := range s.esimProfiles {
+		if s.esimProfiles[i].ID != id {
+			continue
+		}
+		profile := &s.esimProfiles[i]
+		profile.Country = strings.TrimSpace(req.Country)
+		profile.PhoneNumber = strings.TrimSpace(req.PhoneNumber)
+		for j := range s.esimSubscriptions {
+			if s.esimSubscriptions[j].ProfileID == profile.ID {
+				s.esimSubscriptions[j].Country = profile.Country
+				s.esimSubscriptions[j].UpdatedAt = time.Now()
+			}
+		}
+		s.audit = append([]model.AuditLog{{ID: s.nextIDStringLocked("audit"), Actor: "admin", DeviceName: profile.DeviceID, Action: "update_esim_profile", ParameterSummary: profile.ICCID, Result: "success", CreatedAt: time.Now()}}, s.audit...)
+		return *profile, nil
+	}
+	return model.EsimProfile{}, errors.New("esim profile not found")
+}
+
 func (s *Store) ReplaceTerminalEsimProfiles(req model.TerminalEsimProfilesRequest) ([]model.EsimProfile, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -741,12 +765,8 @@ func (s *Store) ReplaceTerminalEsimProfiles(req model.TerminalEsimProfilesReques
 	if !ok {
 		return nil, errors.New("device not found")
 	}
-	kept := make([]model.EsimProfile, 0, len(s.esimProfiles))
-	for _, profile := range s.esimProfiles {
-		if profile.DeviceID != device.ID {
-			kept = append(kept, profile)
-		}
-	}
+	now := time.Now()
+	seen := make(map[string]bool)
 	profiles := make([]model.EsimProfile, 0, len(req.Profiles))
 	for _, item := range req.Profiles {
 		iccid := strings.TrimSpace(item.ICCID)
@@ -754,22 +774,69 @@ func (s *Store) ReplaceTerminalEsimProfiles(req model.TerminalEsimProfilesReques
 		if iccid == "" && aid == "" {
 			continue
 		}
-		idPart := firstNonEmpty(iccid, aid)
-		profile := model.EsimProfile{
-			ID:          "profile-" + device.ID + "-" + sanitizeIDPart(idPart),
-			DeviceID:    device.ID,
-			ICCID:       iccid,
-			AID:         aid,
-			Nickname:    strings.TrimSpace(item.Nickname),
-			Provider:    strings.TrimSpace(item.Provider),
-			Country:     strings.TrimSpace(item.Country),
-			ProfileName: strings.TrimSpace(item.ProfileName),
-			State:       normalizeProfileState(item.State),
+		index := -1
+		for i := range s.esimProfiles {
+			if (iccid != "" && s.esimProfiles[i].ICCID == iccid) || (iccid == "" && aid != "" && s.esimProfiles[i].AID == aid) {
+				index = i
+				break
+			}
 		}
-		profiles = append(profiles, profile)
+		if index < 0 {
+			idPart := firstNonEmpty(iccid, aid)
+			s.esimProfiles = append(s.esimProfiles, model.EsimProfile{ID: "profile-" + sanitizeIDPart(idPart)})
+			index = len(s.esimProfiles) - 1
+		}
+		profile := &s.esimProfiles[index]
+		profile.DeviceID = device.ID
+		profile.ICCID = iccid
+		profile.AID = aid
+		profile.Nickname = strings.TrimSpace(item.Nickname)
+		profile.Provider = strings.TrimSpace(item.Provider)
+		if country := strings.TrimSpace(item.Country); country != "" {
+			profile.Country = country
+		}
+		profile.ProfileName = strings.TrimSpace(item.ProfileName)
+		profile.State = normalizeProfileState(item.State)
+		profile.Available = true
+		profile.MissingSince = time.Time{}
+		profile.LastSeenAt = now
+		seen[profile.ID] = true
+		profiles = append(profiles, *profile)
 	}
-	s.esimProfiles = append(kept, profiles...)
-	s.logs = append([]model.LogEntry{{ID: s.nextIDStringLocked("log"), DeviceID: device.ID, DeviceName: device.Name, Level: "info", Message: fmt.Sprintf("eSIM profiles uploaded count=%d", len(profiles)), CreatedAt: time.Now()}}, s.logs...)
+	for i := range s.esimProfiles {
+		profile := &s.esimProfiles[i]
+		if profile.DeviceID != device.ID || seen[profile.ID] {
+			continue
+		}
+		profile.Available = false
+		profile.State = "missing"
+		if profile.MissingSince.IsZero() {
+			profile.MissingSince = now
+		}
+	}
+	for i := range s.esimSubscriptions {
+		sub := &s.esimSubscriptions[i]
+		profile, found := s.findEsimProfileLocked(sub.ProfileID)
+		if !found {
+			continue
+		}
+		if sub.DeviceID != profile.DeviceID {
+			oldDevice := sub.DeviceID
+			sub.DeviceID = profile.DeviceID
+			if owner, found := s.findDeviceLocked(profile.DeviceID); found {
+				sub.DeviceName = owner.Name
+			}
+			s.logs = append([]model.LogEntry{{ID: s.nextIDStringLocked("log"), DeviceID: profile.DeviceID, DeviceName: sub.DeviceName, Level: "info", Message: fmt.Sprintf("eSIM profile moved from %s to %s", oldDevice, profile.DeviceID), CreatedAt: now}}, s.logs...)
+		}
+		if !profile.Available {
+			sub.Status = "profile_missing"
+		} else if sub.Enabled && sub.Status == "profile_missing" {
+			sub.Status = "scheduled"
+		}
+		sub.Country = profile.Country
+		sub.UpdatedAt = now
+	}
+	s.logs = append([]model.LogEntry{{ID: s.nextIDStringLocked("log"), DeviceID: device.ID, DeviceName: device.Name, Level: "info", Message: fmt.Sprintf("eSIM profiles uploaded count=%d", len(profiles)), CreatedAt: now}}, s.logs...)
 	return append([]model.EsimProfile{}, profiles...), nil
 }
 
@@ -901,7 +968,7 @@ func (s *Store) CreateEsimSubscription(req model.CreateEsimSubscriptionRequest) 
 		KeepaliveMessage: firstNonEmpty(req.KeepaliveMessage, "keepalive"),
 		TargetIDs:        targetIDs,
 		NextRunAt:        startAt,
-		Status:           "scheduled",
+		Status:           profileSubscriptionStatus(profile, req.Enabled),
 		Note:             strings.TrimSpace(req.Note),
 		UpdatedAt:        now,
 	}
@@ -938,6 +1005,8 @@ func (s *Store) UpdateEsimSubscription(id string, req model.UpdateEsimSubscripti
 			sub.Status = "scheduled"
 			if !sub.Enabled {
 				sub.Status = "disabled"
+			} else if profile, found := s.findEsimProfileLocked(sub.ProfileID); found && !profile.Available {
+				sub.Status = "profile_missing"
 			}
 			sub.Note = strings.TrimSpace(req.Note)
 			sub.UpdatedAt = now
@@ -946,6 +1015,27 @@ func (s *Store) UpdateEsimSubscription(id string, req model.UpdateEsimSubscripti
 		}
 	}
 	return model.EsimSubscription{}, errors.New("subscription not found")
+}
+
+func (s *Store) DeleteEsimSubscription(id string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	defer s.persistLocked()
+
+	for _, run := range s.keepaliveRuns {
+		if run.SubscriptionID == id && run.Stage != "completed" && run.Stage != "failed" {
+			return errors.New("subscription has an active keepalive run")
+		}
+	}
+	for i, sub := range s.esimSubscriptions {
+		if sub.ID != id {
+			continue
+		}
+		s.esimSubscriptions = append(s.esimSubscriptions[:i], s.esimSubscriptions[i+1:]...)
+		s.audit = append([]model.AuditLog{{ID: s.nextIDStringLocked("audit"), Actor: "admin", DeviceName: sub.DeviceName, Action: "delete_esim_subscription", ParameterSummary: sub.ProfileName, Result: "success", CreatedAt: time.Now()}}, s.audit...)
+		return nil
+	}
+	return errors.New("subscription not found")
 }
 
 func (s *Store) SubscriptionAppriseTargets(targetIDs []string) []model.AppriseTarget {
@@ -1159,7 +1249,7 @@ func (s *Store) ClaimDueEsimSubscriptions(now time.Time) []model.EsimSubscriptio
 		if sub.StartAt.IsZero() {
 			sub.StartAt = sub.NextRunAt
 		}
-		if !sub.Enabled || sub.NextRunAt.IsZero() || sub.NextRunAt.After(now) {
+		if !sub.Enabled || sub.Status == "profile_missing" || sub.NextRunAt.IsZero() || sub.NextRunAt.After(now) {
 			continue
 		}
 		due = append(due, *sub)
@@ -1327,6 +1417,48 @@ func (s *Store) CreateSendSMSTask(req model.SendSMSRequest) (model.CommandResult
 	return model.CommandResult{CommandID: cmd.ID, Status: cmd.Status, Message: "发送短信任务已创建，等待终端领取"}, nil
 }
 
+func (s *Store) UpdateDevice(id string, req model.UpdateDeviceRequest) (model.Device, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	defer s.persistLocked()
+
+	name := strings.TrimSpace(req.Name)
+	if name == "" {
+		return model.Device{}, errors.New("name is required")
+	}
+	for i := range s.devices {
+		if s.devices[i].ID != id && s.devices[i].DeviceID != id {
+			continue
+		}
+		oldName := s.devices[i].Name
+		s.devices[i].Name = name
+		for j := range s.sms {
+			if s.sms[j].DeviceID == s.devices[i].ID {
+				s.sms[j].DeviceName = name
+			}
+		}
+		for j := range s.logs {
+			if s.logs[j].DeviceID == s.devices[i].ID {
+				s.logs[j].DeviceName = name
+			}
+		}
+		for j := range s.esimSubscriptions {
+			if s.esimSubscriptions[j].DeviceID == s.devices[i].ID {
+				s.esimSubscriptions[j].DeviceName = name
+				s.esimSubscriptions[j].UpdatedAt = time.Now()
+			}
+		}
+		for j := range s.audit {
+			if s.audit[j].DeviceName == oldName {
+				s.audit[j].DeviceName = name
+			}
+		}
+		s.audit = append([]model.AuditLog{{ID: s.nextIDStringLocked("audit"), Actor: "admin", DeviceName: name, Action: "update_device_name", ParameterSummary: oldName + " -> " + name, Result: "success", CreatedAt: time.Now()}}, s.audit...)
+		return s.devices[i], nil
+	}
+	return model.Device{}, errors.New("device not found")
+}
+
 func (s *Store) RegisterTerminal(req model.TerminalRegisterRequest) (model.Device, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -1341,7 +1473,9 @@ func (s *Store) RegisterTerminal(req model.TerminalRegisterRequest) (model.Devic
 		device.LastSeenAt = now
 		device.FirmwareVersion = firstNonEmpty(req.FirmwareVersion, device.FirmwareVersion)
 		device.HardwareModel = firstNonEmpty(req.HardwareModel, device.HardwareModel)
-		device.Name = firstNonEmpty(req.Name, device.Name)
+		if device.Name == "" || device.Name == device.DeviceID {
+			device.Name = firstNonEmpty(req.Name, device.DeviceID)
+		}
 		s.upsertDeviceLocked(device)
 		s.retryStaleCommandsLocked(device, now)
 		s.notifyPendingCommandsLocked(device)
@@ -1723,6 +1857,16 @@ func sanitizeIDPart(value string) string {
 		return "unknown"
 	}
 	return b.String()
+}
+
+func profileSubscriptionStatus(profile model.EsimProfile, enabled bool) string {
+	if !enabled {
+		return "disabled"
+	}
+	if !profile.Available {
+		return "profile_missing"
+	}
+	return "scheduled"
 }
 
 func normalizeProfileState(value string) string {

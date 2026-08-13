@@ -22,6 +22,7 @@ export const navItems: Array<{ page: Page; icon: string; label: string; section?
   { page: 'send', icon: '↗', label: '发送短信' },
   { page: 'routes', icon: '⌁', label: '消息分发', section: '管理' },
   { page: 'esim', icon: '▥', label: 'eSIM' },
+  { page: 'esim-profiles', icon: '▦', label: 'Profile 管理' },
   { page: 'esim-subscriptions', icon: '◴', label: '订阅保活' },
   { page: 'tools', icon: '⌘', label: '诊断工具' },
   { page: 'logs', icon: '≡', label: '日志' },
