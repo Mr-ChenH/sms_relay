@@ -252,6 +252,7 @@ static void beginCustomBLEProvisioning() {
   }
 
   BLEServer* server = BLEDevice::createServer();
+  server->advertiseOnDisconnect(true);
   BLEService* service = server->createService(BLE_SERVICE_UUID);
 
   BLECharacteristic* credCharacteristic = service->createCharacteristic(

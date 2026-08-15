@@ -270,9 +270,8 @@ func (b *Bridge) handleMessage(_ mqtt.Client, msg mqtt.Message) {
 		status := strings.TrimSpace(string(payload))
 		switch status {
 		case "offline":
-			if err := b.store.MarkTerminalOffline(deviceID); err != nil {
-				log.Printf("mqtt offline failed device=%s: %v", deviceID, err)
-			}
+			// MQTT last-will can fire during a brief Wi-Fi reconnect. Let the
+			// heartbeat timeout decide offline state to avoid UI flapping.
 		case "online":
 			if err := b.store.MarkTerminalOnline(deviceID); err != nil {
 				log.Printf("mqtt online failed device=%s: %v", deviceID, err)

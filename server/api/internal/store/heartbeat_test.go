@@ -2,9 +2,22 @@ package store
 
 import (
 	"testing"
+	"time"
 
 	"sms-forwarding/server/api/internal/model"
 )
+
+func TestDeviceStatusAllowsBriefHeartbeatGap(t *testing.T) {
+	now := time.Now()
+	device := model.Device{LastSeenAt: now.Add(-deviceOnlineTimeout + time.Second)}
+	if status := deviceStatusAt(device, now); status != "online" {
+		t.Fatalf("status = %q, want online within grace period", status)
+	}
+	device.LastSeenAt = now.Add(-deviceOnlineTimeout - time.Second)
+	if status := deviceStatusAt(device, now); status != "offline" {
+		t.Fatalf("status = %q, want offline after grace period", status)
+	}
+}
 
 func TestHeartbeatReplacesProfileIdentityFields(t *testing.T) {
 	s := &Store{devices: []model.Device{{

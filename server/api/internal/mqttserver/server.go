@@ -56,11 +56,8 @@ func (h *logHook) OnDisconnect(cl *mqtt.Client, err error, _ bool) {
 	} else {
 		log.Printf("mqtt client disconnected id=%s", cl.ID)
 	}
-	if h.store != nil && strings.HasPrefix(cl.ID, "esp32-") {
-		if markErr := h.store.MarkTerminalOffline(cl.ID); markErr != nil {
-			log.Printf("mqtt disconnect offline mark failed device=%s: %v", cl.ID, markErr)
-		}
-	}
+	// LastSeenAt is refreshed by packets and heartbeats. The store's timeout
+	// absorbs brief Wi-Fi reconnects instead of flashing the terminal offline.
 }
 
 func (h *logHook) OnPublish(cl *mqtt.Client, pk packets.Packet) (packets.Packet, error) {

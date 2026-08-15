@@ -18,7 +18,7 @@ import (
 )
 
 const (
-	deviceOnlineTimeout = 15 * time.Second
+	deviceOnlineTimeout = 45 * time.Second
 	commandClaimTimeout = 2 * time.Minute
 )
 
