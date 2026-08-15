@@ -1502,10 +1502,20 @@ func (s *Store) Heartbeat(req model.TerminalHeartbeatRequest) (model.Device, err
 	device.LastSeenAt = now
 	device.FirmwareVersion = firstNonEmpty(req.FirmwareVersion, device.FirmwareVersion)
 	device.HardwareModel = firstNonEmpty(req.HardwareModel, device.HardwareModel)
-	device.ICCID = strings.TrimSpace(req.ICCID)
+	newICCID := strings.TrimSpace(req.ICCID)
+	if newICCID != "" && newICCID != device.ICCID {
+		// 换卡：清空旧卡信息，等待终端查询并上报新卡号码/运营商
+		device.ICCID = newICCID
+		device.Operator = ""
+		device.PhoneNumber = ""
+	} else {
+		// 终端启动初期或 eUICC 慢查询期间，心跳可能暂不携带号码/运营商，
+		// 空值保留旧数据，避免覆盖为空白（终端就绪后会推送新值覆盖）。
+		device.ICCID = firstNonEmpty(newICCID, device.ICCID)
+		device.Operator = firstNonEmpty(strings.TrimSpace(req.Operator), device.Operator)
+		device.PhoneNumber = firstNonEmpty(strings.TrimSpace(req.PhoneNumber), device.PhoneNumber)
+	}
 	device.EID = firstNonEmpty(req.EID, device.EID)
-	device.Operator = strings.TrimSpace(req.Operator)
-	device.PhoneNumber = strings.TrimSpace(req.PhoneNumber)
 	device.RSSI = req.RSSI
 	device.FreeHeapKB = req.FreeHeapKB
 	device.Uptime = firstNonEmpty(req.Uptime, device.Uptime)

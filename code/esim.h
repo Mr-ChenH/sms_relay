@@ -21,6 +21,10 @@ struct ESimProfile {
   int profileClass;
 };
 
+// eUICC 是否初始化成功（esimInit）。未就绪时 esimGetProfiles/esimGetEID
+// 立即失败返回，避免身份刷新等路径被慢速 APDU 查询阻塞。
+extern bool esimReady;
+
 bool esimInit();
 bool esimGetEID(char* eid, size_t bufferSize);
 int esimGetProfiles(ESimProfile* profiles, int maxProfiles);

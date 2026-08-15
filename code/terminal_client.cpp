@@ -189,29 +189,29 @@ static void refreshIdentityCache(bool force = false) {
   if (!force && lastIdentityRefreshAt > 0 && now - lastIdentityRefreshAt < interval) return;
   lastIdentityRefreshAt = now;
 
-  String activeICCID;
-  String profileProvider;
-  ESimProfile profiles[10];
-  int count = esimGetProfiles(profiles, 10);
-  if (count >= 0) {
-    for (int i = 0; i < count; i++) {
-      if (profiles[i].state == 1 && profiles[i].iccid[0]) {
-        activeICCID = profiles[i].iccid;
-        profileProvider = profiles[i].serviceProviderName;
-        break;
+  // 快速 AT 查询优先：ICCID/运营商/号码第一时间推送到服务端。
+  // 慢速 eUICC APDU 查询（esimGetProfiles 在 6+ Profile 的卡上可达数十秒）
+  // 必须放在最后，否则会阻塞号码/运营商上报（表现为重启后长时间无号码/运营商）。
+  cachedICCID = parseMCCID(sendATCommand("AT+MCCID", 3000));
+  cachedOperator = parseOperatorName(sendATCommand("AT+COPS?", 5000));
+  cachedPhoneNumber = parsePhoneNumber(sendATCommand("AT+CNUM", 3000));
+
+  if (cachedICCID.length() == 0 && esimReady) {
+    // 兜底：AT+MCCID 读不到时，从 eUICC 已启用 Profile 取 ICCID
+    ESimProfile profiles[10];
+    int count = esimGetProfiles(profiles, 10);
+    if (count >= 0) {
+      for (int i = 0; i < count; i++) {
+        if (profiles[i].state == 1 && profiles[i].iccid[0]) {
+          cachedICCID = profiles[i].iccid;
+          if (cachedOperator.length() == 0) cachedOperator = profiles[i].serviceProviderName;
+          break;
+        }
       }
     }
   }
-  if (activeICCID.length() == 0) activeICCID = parseMCCID(sendATCommand("AT+MCCID", 3000));
-  cachedICCID = activeICCID;
-
-  char eid[40];
-  if (esimGetEID(eid, sizeof(eid))) cachedEID = eid;
-
-  String op = parseOperatorName(sendATCommand("AT+COPS?", 5000));
-  cachedOperator = op.length() > 0 ? op : profileProvider;
-
-  cachedPhoneNumber = parsePhoneNumber(sendATCommand("AT+CNUM", 3000));
+  // 注意：EID 属慢速 eUICC 查询，由 terminalSyncEsimProfiles 顺带填充，
+  // 不在此处阻塞号码/运营商上报。
 }
 
 static void terminalRegister() {
@@ -252,10 +252,11 @@ void terminalClientIdentityReady() {
   lastIdentityRefreshAt = 0;
   identitySettleUntil = millis() + IDENTITY_SETTLE_WINDOW_MS;
   refreshIdentityCache(true);
-  terminalSyncEsimProfiles();
+  // 先推送身份（号码/运营商），再做慢速 eSIM Profile 同步（多 Profile 卡上可达数十秒）
   terminalHeartbeat(false);
   terminalReportLog("info", String("initial identity reported: iccid=") + cachedICCID +
                             ", operator=" + cachedOperator + ", phone=" + cachedPhoneNumber);
+  terminalSyncEsimProfiles();
 }
 
 static void refreshIdentityAfterProfileChange() {
@@ -343,6 +344,12 @@ void terminalSyncEsimProfiles() {
     terminalReportLog("warn", String("esim profile sync failed: ") + esimGetLastError());
     lastEsimProfileSyncAt = millis();
     return;
+  }
+
+  // 顺带填充慢速 eUICC 查询的 EID（不阻塞号码/运营商上报路径）
+  if (esimReady) {
+    char eid[40];
+    if (esimGetEID(eid, sizeof(eid))) cachedEID = eid;
   }
 
   JsonDocument doc;

@@ -8,6 +8,8 @@
 static char lastError[128] = "";
 static int lastProfileResult = 0;
 
+bool esimReady = false;
+
 void esimSetError(const char* message) {
   strncpy(lastError, message ? message : "", sizeof(lastError) - 1);
   lastError[sizeof(lastError) - 1] = '\0';
@@ -23,6 +25,7 @@ const char* esimGetLastError() {
 
 bool esimInit() {
   esimSetError("");
+  esimReady = false;
   String response = esimSendAT("AT", 2000);
   if (response.indexOf("OK") < 0) {
     esimSetError(String("模组 AT 无响应: ") + response);
@@ -36,10 +39,15 @@ bool esimInit() {
       return false;
     }
   }
+  esimReady = true;
   return true;
 }
 
 bool esimGetEID(char* eid, size_t bufferSize) {
+  if (!esimReady) {
+    esimSetError("eUICC 未就绪");
+    return false;
+  }
   if (!eid || bufferSize == 0) return false;
   eid[0] = '\0';
   uint8_t request[] = {0xBF, 0x3E, 0x03, 0x5C, 0x01, 0x5A};
@@ -63,6 +71,10 @@ bool esimGetEID(char* eid, size_t bufferSize) {
 }
 
 int esimGetProfiles(ESimProfile* profiles, int maxProfiles) {
+  if (!esimReady) {
+    esimSetError("eUICC 未就绪");
+    return -1;
+  }
   if (!profiles || maxProfiles <= 0) {
     esimSetError("profile 缓冲区无效");
     return -1;

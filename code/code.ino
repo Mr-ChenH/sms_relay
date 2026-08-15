@@ -66,11 +66,12 @@ void setup() {
     logCaptureLn(String("eSIM初始化失败或模组未就绪"));
   }
 
-  // MQTT 会在模组初始化前上线；模组/eSIM 就绪后必须立即补发身份信息。
-  if (modemInitialized) {
-    terminalClientIdentityReady();
-    if (!esimInitialized) logCaptureLn(String("已按物理 SIM 信息完成首次身份上报"));
-  }
+  // MQTT 会在模组初始化前上线；无论模组初始化是否完全成功
+  // （如启动时网络尚未注册导致 CEREG 超时、modemInit 返回 false），
+  // 都应尽早补发身份信息：AT+CNUM 等不依赖网络注册，号码可立即读取；
+  // 运营商在网络注册后由 settle 窗口内的定期刷新补上。
+  terminalClientIdentityReady();
+  if (!esimInitialized) logCaptureLn(String("已按物理 SIM 信息完成首次身份上报"));
 
 }
 
