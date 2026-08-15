@@ -12,5 +12,6 @@ String readSerialLine(HardwareSerial& port);
 bool isHexString(const String& str);
 void processSmsContent(const char* sender, const char* text, const char* timestamp);
 void checkSerial1URC();
+void drainSerial1Urx();
 
 #endif

@@ -31,6 +31,8 @@ static const unsigned long IDENTITY_SETTLE_INTERVAL_MS = 10000;
 static const unsigned long IDENTITY_SETTLE_WINDOW_MS = 120000;
 static const size_t MAX_LOG_QUEUE = 8;
 
+static const char* FIRMWARE_VERSION = "0.9.0-terminal";
+
 static unsigned long smsSequence = 0;
 
 static WiFiClient mqttWifiClient;
@@ -217,7 +219,7 @@ static void terminalRegister() {
   JsonDocument doc;
   doc["deviceId"] = terminalDeviceID();
   doc["name"] = terminalDeviceID();
-  doc["firmwareVersion"] = "0.9.0-terminal";
+  doc["firmwareVersion"] = FIRMWARE_VERSION;
   doc["hardwareModel"] = "ESP32-C3 + ML307A";
   if (publishJSON("/register", doc, false)) {
     registered = true;
@@ -230,7 +232,7 @@ static void terminalHeartbeat(bool refreshIdentity = true) {
   if (refreshIdentity) refreshIdentityCache();
   JsonDocument doc;
   doc["deviceId"] = terminalDeviceID();
-  doc["firmwareVersion"] = "0.9.0-terminal";
+  doc["firmwareVersion"] = FIRMWARE_VERSION;
   doc["hardwareModel"] = "ESP32-C3 + ML307A";
   doc["operator"] = cachedOperator;
   doc["iccid"] = cachedICCID;
@@ -388,6 +390,16 @@ static bool profileIsEnabled(const String& id, String& detail) {
   return false;
 }
 
+// AT 响应成功判定：以 OK 结尾。仅检查末尾小窗口，避免复制大响应；
+// 修复旧逻辑"超时空响应（无 ERROR 字样）被误判为成功"的问题。
+static bool atResponseSucceeded(const String& response) {
+  int len = response.length();
+  int from = len > 64 ? len - 64 : 0;
+  String tail = response.substring(from);
+  tail.trim();
+  return tail.endsWith("OK");
+}
+
 static bool executeCommand(const String& type, JsonVariantConst payload, String& result) {
   if (type == "send_sms") {
     String phone = commandString(payload, "phone");
@@ -404,25 +416,33 @@ static bool executeCommand(const String& type, JsonVariantConst payload, String&
     String command = commandString(payload, "command");
     if (command.length() == 0) command = "AT";
     result = sendATCommand(command.c_str(), 5000);
-    return result.indexOf("ERROR") < 0;
+    if (result.length() == 0) {
+      result = "AT command timed out (no response)";
+      return false;
+    }
+    return atResponseSucceeded(result);
   }
   if (type == "query_signal") {
     result = sendATCommand("AT+CSQ", 3000);
-    return result.indexOf("ERROR") < 0;
+    return atResponseSucceeded(result);
   }
   if (type == "query_sim") {
-    result = sendATCommand("AT+CIMI", 3000) + "\n" + sendATCommand("AT+ICCID", 3000);
-    return result.indexOf("ERROR") < 0;
+    String r1 = sendATCommand("AT+CIMI", 3000);
+    String r2 = sendATCommand("AT+ICCID", 3000);
+    result = r1 + "\n" + r2;
+    return atResponseSucceeded(r1) && atResponseSucceeded(r2);
   }
   if (type == "query_network") {
-    result = sendATCommand("AT+CEREG?", 3000) + "\n" + sendATCommand("AT+COPS?", 5000);
-    return result.indexOf("ERROR") < 0;
+    String r1 = sendATCommand("AT+CEREG?", 3000);
+    String r2 = sendATCommand("AT+COPS?", 5000);
+    result = r1 + "\n" + r2;
+    return atResponseSucceeded(r1) && atResponseSucceeded(r2);
   }
   if (type == "ping") {
     String host = commandString(payload, "host");
     if (host.length() == 0) host = "8.8.8.8";
     result = sendATCommand((String("AT+MPING=\"") + host + "\",30,1").c_str(), 10000);
-    return result.indexOf("ERROR") < 0;
+    return atResponseSucceeded(result);
   }
   if (type == "modem_hardreset") {
     bool ok = resetModule();
@@ -434,7 +454,7 @@ static bool executeCommand(const String& type, JsonVariantConst payload, String&
     bool airplane = result.indexOf("+CFUN: 4") >= 0;
     String setResp = sendATCommand(airplane ? "AT+CFUN=1" : "AT+CFUN=4", 5000);
     result += "\n" + setResp;
-    return setResp.indexOf("ERROR") < 0;
+    return atResponseSucceeded(setResp);
   }
   if (type == "esim_enable_profile") {
     String id = commandString(payload, "iccid");

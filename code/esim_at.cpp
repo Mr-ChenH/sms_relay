@@ -1,12 +1,13 @@
 #include "esim_at.h"
 #include "esim_tlv.h"
 #include "logger.h"
+#include "sms_process.h"
 #include "terminal_client.h"
 
 #include <ctype.h>
 
 String esimSendAT(const char* command, unsigned long timeout) {
-  while (Serial1.available()) Serial1.read();
+  drainSerial1Urx();  // 先处理待收 URC，避免清空串口导致短信丢失
   Serial1.println(command);
 
   unsigned long start = millis();
@@ -23,13 +24,16 @@ String esimSendAT(const char* command, unsigned long timeout) {
       lastByteAt = millis();
     }
     if (gotByte) {
-      String tail = response;
+      // 只检查末尾小窗口，避免每次复制整个响应串（O(n²)）
+      int len = response.length();
+      int from = len > 64 ? len - 64 : 0;
+      String tail = response.substring(from);
       tail.trim();
       sawFinal = tail.endsWith("OK") || tail.endsWith("ERROR") ||
                  tail.indexOf("+CME ERROR:") >= 0 || tail.indexOf("+CMS ERROR:") >= 0;
     }
     if (sawFinal && millis() - lastByteAt >= 300) return response;
-    delay(1);
+    delay(1);  // 让出 CPU 并喂看门狗
   }
   return response;
 }

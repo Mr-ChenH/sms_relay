@@ -112,6 +112,7 @@ bool esimES10Command(const uint8_t* request, size_t requestLength, uint8_t** res
   apdu[4] = (uint8_t)requestLength;
   memcpy(apdu + 5, request, requestLength);
 
+  int getResponseRounds = 0;
   while (true) {
     uint8_t* rx = nullptr;
     size_t rxLength = 0;
@@ -129,6 +130,11 @@ bool esimES10Command(const uint8_t* request, size_t requestLength, uint8_t** res
     }
     free(rx);
     if (sw1 == 0x61) {
+      // eUICC 异常时可能反复返回 0x61，必须有硬上限防止无限循环
+      if (++getResponseRounds > 32) {
+        esimSetError("APDU GET RESPONSE 轮数超限，终止操作");
+        goto done;
+      }
       apdu[0] = cla;
       apdu[1] = 0xC0;
       apdu[2] = 0;

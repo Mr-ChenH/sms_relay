@@ -1,30 +1,39 @@
 #include "modem.h"
 #include "logger.h"
+#include "sms_process.h"
 #include "terminal_client.h"
+#include <ctype.h>
+
+// 判断 AT 响应是否已收到结束标记（以 OK/ERROR 结尾，或包含 +CME/+CMS ERROR）
+// 只检查末尾小窗口，避免每次复制整个响应串。
+static bool atResponseFinished(const String& resp) {
+  int len = resp.length();
+  int from = len > 64 ? len - 64 : 0;
+  String tail = resp.substring(from);
+  tail.trim();
+  return tail.endsWith("OK") || tail.endsWith("ERROR") ||
+         tail.indexOf("+CME ERROR:") >= 0 || tail.indexOf("+CMS ERROR:") >= 0;
+}
 
 // 发送AT命令并获取响应
 String sendATCommand(const char* cmd, unsigned long timeout) {
-  while (Serial1.available()) Serial1.read();
+  drainSerial1Urx();  // 先处理待收 URC，避免清空串口导致短信丢失
   Serial1.println(cmd);
-  
+
   unsigned long start = millis();
+  unsigned long lastByteAt = start;
   String resp = "";
   while (millis() - start < timeout) {
     terminalClientService();
+    delay(1);  // 让出 CPU 并喂看门狗，避免长时间无 yield 触发重启
     if (Serial1.available()) {
-      char c = Serial1.read();
-      resp += c;
-      if (resp.indexOf("OK") >= 0 || resp.indexOf("ERROR") >= 0) {
-        // 读取剩余数据（最多 50ms）
-        unsigned long t = millis();
-        while (millis() - t < 50) {
-          if (Serial1.available()) resp += (char)Serial1.read();
-
-        }
-        return resp;
+      while (Serial1.available()) {
+        resp += (char)Serial1.read();
+        lastByteAt = millis();
       }
+      // 收到结束标记后再静默 300ms，确保响应完整（顺带吸收紧随其后的 URC）
+      if (atResponseFinished(resp) && millis() - lastByteAt >= 300) break;
     }
-
   }
   return resp;
 }
@@ -161,21 +170,56 @@ void blink_short(unsigned long gap_time) {
 }
 
 bool sendATandWaitOK(const char* cmd, unsigned long timeout) {
-  while (Serial1.available()) Serial1.read();
+  drainSerial1Urx();  // 先处理待收 URC，避免清空串口导致短信丢失
   Serial1.println(cmd);
   unsigned long start = millis();
   String resp = "";
   while (millis() - start < timeout) {
     terminalClientService();
+    delay(1);  // 让出 CPU 并喂看门狗
     if (Serial1.available()) {
       char c = Serial1.read();
       resp += c;
-      if (resp.indexOf("OK") >= 0) return true;
-      if (resp.indexOf("ERROR") >= 0) return false;
+      String tail = resp;
+      tail.trim();
+      if (tail.endsWith("OK")) return true;
+      if (tail.endsWith("ERROR") || tail.indexOf("+CME ERROR:") >= 0 || tail.indexOf("+CMS ERROR:") >= 0) return false;
     }
-
   }
   return false;
+}
+
+// 解析 +CEREG: <n>,<stat> 或 +CEREG: <stat> 中的 <stat>，解析失败返回 -1。
+// 避免用 ",1" 这类子串匹配误判 ",10"~",19"。
+static int parseCeregStat(const String& resp) {
+  int idx = resp.indexOf("+CEREG:");
+  if (idx < 0) return -1;
+  int pos = idx + 7;
+  while (pos < resp.length() && (resp.charAt(pos) == ' ' || resp.charAt(pos) == '\r' || resp.charAt(pos) == '\n')) pos++;
+  int first = 0;
+  bool digits = false;
+  while (pos < resp.length() && isdigit((unsigned char)resp.charAt(pos))) {
+    first = first * 10 + (resp.charAt(pos) - '0');
+    pos++;
+    digits = true;
+  }
+  if (!digits) return -1;
+  while (pos < resp.length() && resp.charAt(pos) == ' ') pos++;
+  if (pos < resp.length() && resp.charAt(pos) == ',') {
+    pos++;
+    while (pos < resp.length() && resp.charAt(pos) == ' ') pos++;
+    int stat = 0;
+    digits = false;
+    while (pos < resp.length() && isdigit((unsigned char)resp.charAt(pos))) {
+      stat = stat * 10 + (resp.charAt(pos) - '0');
+      pos++;
+      digits = true;
+    }
+    if (!digits) return -1;
+    return stat;
+  }
+  // 没有逗号：第一个数字就是 <stat>
+  return first;
 }
 
 // 检测网络注册状态（LTE/4G）
@@ -186,16 +230,16 @@ bool waitCEREG() {
   String resp = "";
   while (millis() - start < 2000) {
     terminalClientService();
+    delay(1);  // 让出 CPU 并喂看门狗
     if (Serial1.available()) {
       char c = Serial1.read();
       resp += c;
-      if (resp.indexOf("+CEREG:") >= 0) {
-        if (resp.indexOf(",1") >= 0 || resp.indexOf(",5") >= 0) return true;
-        if (resp.indexOf(",0") >= 0 || resp.indexOf(",2") >= 0 || 
-            resp.indexOf(",3") >= 0 || resp.indexOf(",4") >= 0) return false;
+      int stat = parseCeregStat(resp);
+      if (stat >= 0) {
+        if (stat == 1 || stat == 5) return true;
+        if (stat == 0 || stat == 2 || stat == 3 || stat == 4) return false;
       }
     }
-
   }
   return false;
 }
@@ -223,7 +267,7 @@ bool sendSMS(const char* phoneNumber, const char* message) {
   String cmgsCmd = "AT+CMGS=";
   cmgsCmd += pduLen;
   
-  while (Serial1.available()) Serial1.read();
+  drainSerial1Urx();  // 先处理待收 URC，避免清空串口导致短信丢失
   Serial1.println(cmgsCmd);
   
   // 等待 > 提示符
@@ -231,15 +275,14 @@ bool sendSMS(const char* phoneNumber, const char* message) {
   bool gotPrompt = false;
   while (millis() - start < 5000) {
     terminalClientService();
+    delay(1);  // 让出 CPU 并喂看门狗
     if (Serial1.available()) {
       char c = Serial1.read();
-      logCapture(String(c));
       if (c == '>') {
         gotPrompt = true;
         break;
       }
     }
-
   }
   
   if (!gotPrompt) {
@@ -251,25 +294,31 @@ bool sendSMS(const char* phoneNumber, const char* message) {
   Serial1.print(pdu.getSMS());
   Serial1.write(0x1A);  // Ctrl+Z 结束
   
-  // 等待响应
+  // 等待响应（仅在结束时整段记录，避免逐字符 logCapture 造成堆碎片）
   start = millis();
   String resp = "";
+  unsigned long lastByteAt = start;
   while (millis() - start < 30000) {
     terminalClientService();
-    while (Serial1.available()) {
-      char c = Serial1.read();
-      resp += c;
-      logCapture(String(c));
-      if (resp.indexOf("OK") >= 0) {
-        logCaptureLn(String("\n短信发送成功"));
-        return true;
+    delay(1);  // 让出 CPU 并喂看门狗
+    if (Serial1.available()) {
+      while (Serial1.available()) {
+        char c = Serial1.read();
+        resp += c;
+        lastByteAt = millis();
       }
-      if (resp.indexOf("ERROR") >= 0) {
-        logCaptureLn(String("\n短信发送失败"));
+      if (atResponseFinished(resp)) {
+        logCaptureLn(String("模组响应: ") + resp);
+        String tail = resp;
+        tail.trim();
+        if (tail.endsWith("OK")) {
+          logCaptureLn(String("短信发送成功"));
+          return true;
+        }
+        logCaptureLn(String("短信发送失败"));
         return false;
       }
     }
-
   }
   logCaptureLn(String("短信发送超时"));
   return false;

@@ -241,27 +241,27 @@ static void handlePduLine(const String& line) {
   }
 }
 
-// 处理URC和PDU
-void checkSerial1URC() {
-  static enum { IDLE,
-                WAIT_PDU } state = IDLE;
+// URC 解析状态机（文件级状态，供 checkSerial1URC 与 drainSerial1Urx 共用）
+static enum { URC_IDLE,
+              URC_WAIT_PDU } urcState = URC_IDLE;
 
-  String line = readSerialLine(Serial1);
+// 处理一行串口数据（+CMT 头 / PDU 数据行 / 无头 PDU 行）
+static void processSerial1Line(const String& line) {
   if (line.length() == 0) return;
 
   // 打印到调试串口
   logCaptureLn(String("Debug> " + line));
 
-  if (state == IDLE) {
+  if (urcState == URC_IDLE) {
     // 检测到短信上报URC头
     if (line.startsWith("+CMT:")) {
       logCaptureLn(String("检测到+CMT，等待PDU数据..."));
-      state = WAIT_PDU;
+      urcState = URC_WAIT_PDU;
     } else if (isHexString(line) && line.length() >= 20) {
       logCaptureLn(String("检测到无+CMT头的PDU行，按短信分段处理"));
       handlePduLine(line);
     }
-  } else if (state == WAIT_PDU) {
+  } else if (urcState == URC_WAIT_PDU) {
     // 如果等待PDU时又来了新的+CMT头，继续等待下一行PDU
     if (line.startsWith("+CMT:")) {
       logCaptureLn(String("等待PDU时再次收到+CMT，继续等待PDU数据..."));
@@ -270,10 +270,41 @@ void checkSerial1URC() {
 
     if (isHexString(line)) {
       handlePduLine(line);
-      state = IDLE;
+      urcState = URC_IDLE;
     } else {
       logCaptureLn(String("收到非PDU数据，返回IDLE状态"));
-      state = IDLE;
+      urcState = URC_IDLE;
     }
+  }
+}
+
+// 处理URC和PDU
+void checkSerial1URC() {
+  processSerial1Line(readSerialLine(Serial1));
+}
+
+// 在 AT 命令清空 Serial1 之前调用：先把缓冲区中完整的 URC（+CMT: 头 + PDU 数据行）
+// 收完处理掉，避免清空操作把待收短信丢掉。无待处理数据时立即返回，不阻塞 AT 流程。
+void drainSerial1Urx() {
+  unsigned long start = millis();
+  unsigned long lastDataAt = millis();
+  while (millis() - start < 2000) {
+    String line = readSerialLine(Serial1);
+    if (line.length() > 0) {
+      lastDataAt = millis();
+      processSerial1Line(line);
+      continue;
+    }
+    if (Serial1.available() == 0) {
+      if (urcState == URC_WAIT_PDU) {
+        // 已读到 +CMT: 头，PDU 数据行即将到达，再等一会
+        delay(1);
+        continue;
+      }
+      return;
+    }
+    // 有未成行的部分数据：数据仍在持续到达时继续等它收完，长时间无进展则放弃
+    if (millis() - lastDataAt >= 100) return;
+    delay(1);
   }
 }
