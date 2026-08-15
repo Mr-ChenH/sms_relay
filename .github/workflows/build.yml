@@ -32,4 +32,6 @@ jobs:
     
     - name: Compile firmware
       run: |
+        # 默认分区（1.2MB APP）作为体积守卫：固件已移除 BLE（改 SoftAP 配网），
+        # 当前约 1.17MB；若未来膨胀导致默认分区编译失败，需评估代码体积而非放宽分区。
         arduino-cli compile --fqbn esp32:esp32:esp32c3 ./code

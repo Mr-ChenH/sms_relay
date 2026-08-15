@@ -4,12 +4,10 @@
 #include "modem.h"
 #include "config.h"
 #include "terminal_client.h"
-#include <BLEDevice.h>
-#include <BLEServer.h>
-#include <BLEUtils.h>
+#include "web_config.h"
 
 #ifndef WIFI_PROV_SERVICE_PREFIX
-#define WIFI_PROV_SERVICE_PREFIX "SMSCFG"
+#define WIFI_PROV_SERVICE_PREFIX "SMSHub"
 #endif
 
 #ifndef WIFI_PROV_FORCE_ON_BOOT
@@ -17,24 +15,26 @@
 #endif
 
 static const char* WIFI_PREF_NAMESPACE = "wifi_runtime";
-static const char* BLE_SERVICE_UUID = "7d6d0001-5f36-4f64-8f2b-ec2a7b3d0101";
-static const char* BLE_CRED_CHAR_UUID = "7d6d0002-5f36-4f64-8f2b-ec2a7b3d0101";
-static const char* BLE_STATUS_CHAR_UUID = "7d6d0003-5f36-4f64-8f2b-ec2a7b3d0101";
+static const unsigned long WIFI_CONNECT_TIMEOUT_MS = 20000;
+static const unsigned long WIFI_PROVISION_WAIT_MS = 30000;  // 首次配网等待上限，避免 setup 永久阻塞
 
-static bool provisioningStarted = false;
+static bool apStarted = false;
 static bool pendingCredentials = false;
 static bool pendingTerminalConfig = false;
 static volatile bool wifiConnectionLost = false;
 static String pendingSSID;
 static String pendingPassword;
-static BLECharacteristic* statusCharacteristic = nullptr;
 
-static void saveHubConfig(const String& mqttBroker, const String& mqttUser, const String& mqttPass);
+// 配网页/串口命令只暂存配置，由主循环 applyPendingConfiguration 真正写入
+// NVS/Preferences（避免在回调/事件上下文并发访问共享资源）。
+static bool pendingServerSave = false;
+static String pendingServerHost;
+static bool pendingMqttSave = false;
+static String pendingMqttBroker;
+static String pendingMqttUser;
+static String pendingMqttPass;
 
-String wifiProvisioningPOP() {
-  return "none";
-}
-
+// 设备热点名称：SMSHub-XXXXXX（MAC 后六位）
 String wifiProvisioningServiceName() {
   String mac = WiFi.macAddress();
   mac.replace(":", "");
@@ -43,9 +43,7 @@ String wifiProvisioningServiceName() {
   return String(WIFI_PROV_SERVICE_PREFIX) + "-" + mac;
 }
 
-static void setBLEStatus(const String& status) {
-  if (statusCharacteristic) statusCharacteristic->setValue(status.c_str());
-}
+static void saveHubConfig(const String& mqttBroker, const String& mqttUser, const String& mqttPass);
 
 static bool loadSavedWiFi(String& ssid, String& password) {
   preferences.begin(WIFI_PREF_NAMESPACE, true);
@@ -108,12 +106,10 @@ static void onWiFiEvent(arduino_event_t* event) {
   switch (event->event_id) {
     case ARDUINO_EVENT_WIFI_STA_GOT_IP:
       logCaptureLn(String("WiFi 已连接, IP: ") + WiFi.localIP().toString());
-      setBLEStatus(String("connected:") + WiFi.localIP().toString());
       break;
     case ARDUINO_EVENT_WIFI_STA_DISCONNECTED:
       wifiConnectionLost = true;
       logCaptureLn(String("WiFi 已断开"));
-      if (WiFi.status() != WL_CONNECTED) setBLEStatus("wifi_disconnected");
       break;
     default:
       break;
@@ -121,7 +117,7 @@ static void onWiFiEvent(arduino_event_t* event) {
 }
 
 static bool connectWiFiWithCredentials(const String& ssid, const String& password, unsigned long timeoutMs) {
-  WiFi.mode(WIFI_STA);
+  WiFi.mode(WIFI_AP_STA);  // 保持 SoftAP 配网热点共存，随时可重新配网
   WiFi.setSleep(false);
   WiFi.setAutoReconnect(true);
   WiFi.setScanMethod(WIFI_FAST_SCAN);
@@ -129,7 +125,6 @@ static bool connectWiFiWithCredentials(const String& ssid, const String& passwor
   WiFi.begin(ssid.c_str(), password.c_str());
 
   logCaptureLn(String("正在连接 WiFi: ") + ssid);
-  setBLEStatus(String("connecting:") + ssid);
   unsigned long start = millis();
   while (WiFi.status() != WL_CONNECTED && millis() - start < timeoutMs) {
     blink_short(200);
@@ -143,139 +138,47 @@ static bool connectWiFiWithCredentials(const String& ssid, const String& passwor
     logCaptureLn(WiFi.localIP().toString());
     logCapture(String("信号强度(RSSI): "));
     logCaptureLn(String(WiFi.RSSI()) + " dBm");
-    setBLEStatus(String("connected:") + WiFi.localIP().toString());
     return true;
   }
 
   logCaptureLn(String("WiFi 连接失败: ") + ssid);
-  setBLEStatus("connect_failed");
   return false;
 }
 
-class WiFiConfigCallbacks : public BLECharacteristicCallbacks {
-  void onWrite(BLECharacteristic* characteristic) override {
-    String value = characteristic->getValue();
-    value.trim();
+// 启动 SoftAP 配网热点（无密码，局域网内短时开放；正式部署建议后续加 PIN 码保护）
+void startProvisioningAP() {
+  if (apStarted) return;
+  apStarted = true;
+  String apName = wifiProvisioningServiceName();
+  WiFi.mode(WIFI_AP_STA);
+  WiFi.softAP(apName.c_str());
+  webConfigInit();
+  logCaptureLn(String("SoftAP 配网已启动: 热点 ") + apName + " -> http://192.168.4.1");
+}
 
-    if (value.startsWith("SERVER|")) {
-      String host = value.substring(7);
-      host.trim();
-      if (host.length() == 0) {
-        setBLEStatus("invalid_server_host");
-        return;
-      }
-      saveServerHost(host);
-      setBLEStatus(String("server_saved:") + hostFromURL(host));
-      return;
-    }
-
-    if (value.startsWith("MQTT|")) {
-      String rest = value.substring(5);
-      int first = rest.indexOf('|');
-      int second = first >= 0 ? rest.indexOf('|', first + 1) : -1;
-      String broker = first >= 0 ? rest.substring(0, first) : rest;
-      String user = first >= 0 && second >= 0 ? rest.substring(first + 1, second) : "";
-      String pass = second >= 0 ? rest.substring(second + 1) : "";
-      broker.trim();
-      if (broker.length() == 0) {
-        setBLEStatus("invalid_mqtt_broker");
-        return;
-      }
-      saveHubMqttConfig(broker, user, pass);
-      setBLEStatus(String("mqtt_saved:") + config.smsHubMqttBroker);
-      return;
-    }
-
-    if (value.startsWith("HUB|")) {
-      String rest = value.substring(4);
-      int first = rest.indexOf('|');
-      int second = first >= 0 ? rest.indexOf('|', first + 1) : -1;
-      int third = second >= 0 ? rest.indexOf('|', second + 1) : -1;
-      String broker = first >= 0 && second >= 0 ? rest.substring(first + 1, second) : "";
-      String user = second >= 0 && third >= 0 ? rest.substring(second + 1, third) : "";
-      String pass = third >= 0 ? rest.substring(third + 1) : "";
-      broker.trim();
-      if (broker.length() == 0) {
-        setBLEStatus("invalid_mqtt_broker");
-        return;
-      }
-      saveHubMqttConfig(broker, user, pass);
-      setBLEStatus(String("hub_saved:") + config.smsHubMqttBroker);
-      return;
-    }
-
-    int sep = value.indexOf('|');
-    if (sep <= 0) sep = value.indexOf('\n');
-    if (sep <= 0) {
-      setBLEStatus("invalid_format_use_ssid_pipe_password_pipe_api");
-      return;
-    }
-
-    int mqttSep = value.indexOf('|', sep + 1);
-    int userSep = mqttSep > sep ? value.indexOf('|', mqttSep + 1) : -1;
-    int passSep = userSep > mqttSep ? value.indexOf('|', userSep + 1) : -1;
-    pendingSSID = value.substring(0, sep);
-    pendingPassword = mqttSep > sep ? value.substring(sep + 1, mqttSep) : value.substring(sep + 1);
-    String pendingMqttBroker = mqttSep > sep ? (userSep > mqttSep ? value.substring(mqttSep + 1, userSep) : value.substring(mqttSep + 1)) : "";
-    String pendingMqttUser = userSep > mqttSep ? (passSep > userSep ? value.substring(userSep + 1, passSep) : value.substring(userSep + 1)) : "";
-    String pendingMqttPass = passSep > userSep ? value.substring(passSep + 1) : "";
-    pendingSSID.trim();
-    pendingPassword.trim();
-    pendingMqttBroker.trim();
-    if (pendingSSID.length() == 0) {
-      setBLEStatus("invalid_ssid");
-      return;
-    }
-
-    if (pendingMqttBroker.length() > 0) {
-      saveHubMqttConfig(pendingMqttBroker, pendingMqttUser, pendingMqttPass);
-    }
+// 配网页/串口命令统一入口：暂存配置，主循环 applyPendingConfiguration 处理
+void saveProvisionedConfig(const String& ssid, const String& password, const String& hub) {
+  String s = ssid;
+  s.trim();
+  if (s.length() > 0) {
+    pendingSSID = s;
+    pendingPassword = password;
     pendingCredentials = true;
-    setBLEStatus(String("received:") + pendingSSID + (pendingMqttBroker.length() > 0 ? ":mqtt" : ":wifi"));
   }
-};
-
-static void beginCustomBLEProvisioning() {
-  if (provisioningStarted) return;
-  provisioningStarted = true;
-
-  String serviceName = wifiProvisioningServiceName();
-  logCaptureLn(String("BLE WiFi 配网已启动"));
-  logCaptureLn(String("BLE 设备名: ") + serviceName);
-  logCaptureLn(String("写入格式: SSID|PASSWORD|SERVER_HOST"));
-  logCaptureLn(String("仅修改服务器: SERVER|SERVER_HOST"));
-  logCaptureLn(String("兼容格式: SSID|PASSWORD|MQTT_BROKER|MQTT_USER|MQTT_PASS"));
-
-  if (!BLEDevice::init(serviceName.c_str())) {
-    logCaptureLn(String("BLE 初始化失败"));
-    return;
+  String h = hub;
+  h.trim();
+  if (h.length() > 0) {
+    // 纯 host 规范化为 mqtt://host:1883；带端口或完整 URL 的保留原样
+    if (h.indexOf("://") < 0) {
+      if (h.indexOf(':') < 0) h = String("mqtt://") + h + ":1883";
+      else h = String("mqtt://") + h;
+    }
+    pendingMqttBroker = h;
+    pendingMqttUser = "";
+    pendingMqttPass = "";
+    pendingMqttSave = true;
   }
-
-  BLEServer* server = BLEDevice::createServer();
-  server->advertiseOnDisconnect(true);
-  BLEService* service = server->createService(BLE_SERVICE_UUID);
-
-  BLECharacteristic* credCharacteristic = service->createCharacteristic(
-    BLE_CRED_CHAR_UUID,
-    BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_WRITE
-  );
-  credCharacteristic->setValue("write SSID|PASSWORD|SERVER_HOST");
-  credCharacteristic->setCallbacks(new WiFiConfigCallbacks());
-
-  statusCharacteristic = service->createCharacteristic(
-    BLE_STATUS_CHAR_UUID,
-    BLECharacteristic::PROPERTY_READ
-  );
-  setBLEStatus("waiting_for_credentials");
-
-  service->start();
-  BLEAdvertising* advertising = BLEDevice::getAdvertising();
-  advertising->addServiceUUID(BLE_SERVICE_UUID);
-  advertising->setScanResponse(true);
-  advertising->setMinPreferred(0x06);
-  advertising->setMaxPreferred(0x12);
-  BLEDevice::startAdvertising();
-  logCaptureLn(String("BLE 广播已启动"));
+  logCaptureLn(String("收到配网配置: SSID=") + (s.length() > 0 ? s : "(不变)") + ", hub=" + (h.length() > 0 ? h : "(不变)"));
 }
 
 static void applyPendingConfiguration() {
@@ -289,6 +192,24 @@ static void applyPendingConfiguration() {
     terminalClientConfigChanged();
   }
 
+  // 应用配网页/串口暂存的中心服务配置
+  if (pendingServerSave) {
+    pendingServerSave = false;
+    String host = pendingServerHost;
+    pendingServerHost = "";
+    saveServerHost(host);
+  }
+  if (pendingMqttSave) {
+    pendingMqttSave = false;
+    String broker = pendingMqttBroker;
+    String user = pendingMqttUser;
+    String pass = pendingMqttPass;
+    pendingMqttBroker = "";
+    pendingMqttUser = "";
+    pendingMqttPass = "";
+    saveHubMqttConfig(broker, user, pass);
+  }
+
   if (!pendingCredentials) return;
   pendingCredentials = false;
   String previousSSID;
@@ -297,15 +218,14 @@ static void applyPendingConfiguration() {
   WiFi.setAutoReconnect(false);
   WiFi.disconnect(true, false);
   delay(100);
-  if (connectWiFiWithCredentials(pendingSSID, pendingPassword, 20000)) {
+  if (connectWiFiWithCredentials(pendingSSID, pendingPassword, WIFI_CONNECT_TIMEOUT_MS)) {
     saveWiFiCredentials(pendingSSID, pendingPassword);
     return;
   }
 
   if (hadPreviousCredentials && previousSSID != pendingSSID) {
     logCaptureLn(String("恢复此前 WiFi: ") + previousSSID);
-    setBLEStatus(String("restoring:") + previousSSID);
-    connectWiFiWithCredentials(previousSSID, previousPassword, 20000);
+    connectWiFiWithCredentials(previousSSID, previousPassword, WIFI_CONNECT_TIMEOUT_MS);
   }
   WiFi.setAutoReconnect(true);
 }
@@ -322,20 +242,25 @@ bool reconnectConfiguredWiFi(unsigned long timeoutMs) {
 
 bool connectWiFiOrStartProvisioning() {
   WiFi.onEvent(onWiFiEvent);
+  startProvisioningAP();  // 热点常开，任何时刻都能通过配网页修改配置
+
 #if !WIFI_PROV_FORCE_ON_BOOT
-  if (reconnectConfiguredWiFi(20000)) {
-    beginCustomBLEProvisioning();
+  if (reconnectConfiguredWiFi(WIFI_CONNECT_TIMEOUT_MS)) {
     return true;
   }
 #else
-  logCaptureLn(String("强制启动 BLE WiFi 配网模式"));
+  logCaptureLn(String("强制配网模式：清除已保存凭据"));
   WiFi.disconnect(true, true);
   clearWiFiCredentials();
 #endif
 
-  beginCustomBLEProvisioning();
-  while (WiFi.status() != WL_CONNECTED) {
+  // 有界等待配网：首次使用或已保存凭据暂时不可达时，给配网页留一段时间。
+  // 超时后继续启动模组与 MQTT（WiFi 驱动会按已保存凭据在后台自动重连，
+  // 主循环的 wifiManagerLoop 持续处理配网页/串口写入的新配置），设备不会卡死。
+  unsigned long provisionStart = millis();
+  while (WiFi.status() != WL_CONNECTED && millis() - provisionStart < WIFI_PROVISION_WAIT_MS) {
     applyPendingConfiguration();
+    webConfigLoop();
     blink_short(500);
   }
   return true;
@@ -343,12 +268,73 @@ bool connectWiFiOrStartProvisioning() {
 
 void wifiManagerLoop() {
   applyPendingConfiguration();
+  webConfigLoop();
 }
 
 void resetWiFiProvisioning() {
-  logCaptureLn(String("清除已保存 WiFi 凭据并重新启动 BLE 配网"));
-  WiFi.disconnect(true, true);
+  logCaptureLn(String("清除已保存 WiFi 凭据，SoftAP 配网保持可用"));
+  WiFi.disconnect(true, false);
   clearWiFiCredentials();
-  delay(500);
-  beginCustomBLEProvisioning();
+}
+
+// 串口配网命令（在 eSIM 命令之前调用）：
+//   wifi <SSID> <密码>     保存并连接 WiFi
+//   server <host>          保存 SMS Hub 服务器地址（mqtt://host:1883 或 host）
+//   status                 查看 WiFi/服务器配置状态
+//   wifi reset             清除已保存的 WiFi 凭据
+bool provisionSerialCommand(const String& cmd) {
+  String line = cmd;
+  line.trim();
+  if (line.length() == 0) return false;
+
+  if (line == "status") {
+    String ssid;
+    String pass;
+    bool has = loadSavedWiFi(ssid, pass);
+    Serial.println("--- 终端状态 ---");
+    Serial.println(String("WiFi 连接: ") + (WiFi.status() == WL_CONNECTED ? WiFi.SSID() + " (" + WiFi.localIP().toString() + ")" : "未连接"));
+    Serial.println(String("已保存 WiFi: ") + (has ? ssid : "(无)"));
+    Serial.println(String("SMS Hub 服务器: ") + (config.smsHubMqttBroker.length() > 0 ? config.smsHubMqttBroker : "(未配置)"));
+    Serial.println(String("配网热点: ") + wifiProvisioningServiceName() + " -> http://192.168.4.1");
+    return true;
+  }
+
+  if (line == "wifi reset") {
+    clearWiFiCredentials();
+    logCaptureLn(String("WiFi 凭据已清除"));
+    Serial.println("WiFi 凭据已清除");
+    return true;
+  }
+
+  if (line.startsWith("wifi")) {
+    String rest = line.substring(4);
+    rest.trim();
+    if (rest.startsWith("set ")) rest = rest.substring(4);
+    int sp = rest.indexOf(' ');
+    String ssid = sp >= 0 ? rest.substring(0, sp) : rest;
+    String pass = sp >= 0 ? rest.substring(sp + 1) : "";
+    ssid.trim();
+    if (ssid.length() == 0) {
+      Serial.println("用法: wifi <SSID> <密码>  （密码可留空）");
+      return true;
+    }
+    saveProvisionedConfig(ssid, pass, "");
+    Serial.println(String("WiFi 配置已保存: ") + ssid);
+    return true;
+  }
+
+  if (line.startsWith("server")) {
+    String rest = line.substring(6);
+    rest.trim();
+    if (rest.startsWith("set ")) rest = rest.substring(4);
+    if (rest.length() == 0) {
+      Serial.println(String("当前服务器: ") + (config.smsHubMqttBroker.length() > 0 ? config.smsHubMqttBroker : "(未配置)"));
+      return true;
+    }
+    saveProvisionedConfig("", "", rest);
+    Serial.println(String("服务器已保存: ") + rest);
+    return true;
+  }
+
+  return false;
 }

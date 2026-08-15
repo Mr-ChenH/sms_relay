@@ -1,4 +1,5 @@
 #include "esim.h"
+#include "wifi_manager.h"
 
 static void printProfile(const ESimProfile& profile, int index) {
   Serial.print(index);
@@ -70,11 +71,12 @@ bool handleSerialConsole() {
       if (line.length() > 0) {
         String command = line;
         line = "";
-        if (!handleESimSerialCommand(command)) Serial1.println(command);
+        if (!handleESimSerialCommand(command) && !provisionSerialCommand(command)) Serial1.println(command);
       }
     } else if (line.length() < 160) {
       line += c;
     }
+    delay(1);  // 长输入流（如粘贴）时让出 CPU 并喂看门狗，避免长时间占用主循环
   }
   return consumed;
 }

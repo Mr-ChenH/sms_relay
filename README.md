@@ -15,7 +15,7 @@
 - [快速开始](#快速开始)
 - [硬件准备与接线](#硬件准备与接线)
 - [固件编译](#固件编译)
-- [BLE 配网与终端接入](#ble-配网与终端接入)
+- [SoftAP 配网与终端接入](#softap-配网与终端接入)
 - [管理台使用流程](#管理台使用流程)
 - [消息分发](#消息分发)
 - [MCP 服务](#mcp-服务)
@@ -49,7 +49,7 @@
 ┌──────────────────────────────┐
 │ ESP32-C3 终端                │
 │                              │
-│  BLE 配网                    │
+│  SoftAP 配网               │
 │  UART / AT / PDU             │
 │  短信持久队列                │
 │  eSIM ES10x / APDU           │
@@ -100,7 +100,7 @@
 
 ### 1. 确认服务端地址
 
-ESP32 不能访问服务器容器中的 `localhost`。记录运行 Docker 的主机局域网 IP，例如 `192.168.1.10`；后续通过 BLE 将这个主机地址写入终端。管理台中的公开配置默认根据浏览器访问地址自动推导，无需在 Compose 中设置环境变量。
+ESP32 不能访问服务器容器中的 `localhost`。记录运行 Docker 的主机局域网 IP，例如 `192.168.1.10`；后续通过配网页或串口命令将这个主机地址写入终端。管理台中的公开配置默认根据浏览器访问地址自动推导，无需在 Compose 中设置环境变量。
 
 ### 2. 从 Docker Hub 启动
 
@@ -196,8 +196,10 @@ GND         --------------------- GND
 
 1. 安装 [Arduino IDE](https://www.arduino.cc/en/software)。
 2. 安装 [Arduino ESP32](https://docs.espressif.com/projects/arduino-esp32/en/latest/installing.html) 开发板支持。
-3. 选择 `MakerGO ESP32 C3 SuperMini` 或与你硬件匹配的 ESP32-C3 板型。
+3. 选择 `MakerGO ESP32 C3 SuperMini` 或与你硬件匹配的 ESP32-C3 板型（分区方案保持默认即可）。
 4. 将 `code/` 目录作为 Arduino sketch 打开。
+
+> 编译产物约 1.17MB，默认分区（1.2MB APP）即可容纳。早期固件包含 Bluedroid BLE 协议栈（约 300KB），配网方式已改为 SoftAP 网页配网后移除，体积回到默认分区内。若未来体积膨胀导致编译失败，请优先考虑代码瘦身，不要轻易放宽分区。
 
 国内镜像可选：
 
@@ -213,7 +215,7 @@ https://jihulab.com/esp-mirror/espressif/arduino-esp32/-/raw/gh-pages/package_es
 | `PubSubClient` by Nick O'Leary | MQTT 通信 |
 | `ArduinoJson` | MQTT JSON 编解码和持久队列 |
 
-BLE、WiFi、Preferences 和 LittleFS 来自 Arduino ESP32 框架。
+WiFi、Preferences 和 LittleFS 来自 Arduino ESP32 框架。
 
 ### 烧录前检查
 
@@ -222,66 +224,50 @@ BLE、WiFi、Preferences 和 LittleFS 来自 Arduino ESP32 框架。
 - 串口监视器波特率设置为 `115200`。
 - 天线已连接，SIM/eUICC 状态正常。
 
-烧录后，终端会优先尝试已保存的 WiFi；没有有效凭据时启动 BLE 配网。为了现场修改服务器配置，BLE 广播在 WiFi 已连接时也会启动。
+烧录后，终端会优先尝试已保存的 WiFi；同时开启配网热点 `SMSHub-XXXXXX`（WiFi 已连接时也保持开启，便于现场修改服务器配置）。
 
-## BLE 配网与终端接入
+## SoftAP 配网与终端接入
 
-### BLE 服务
+### 配网热点
+
+设备上电后开启配网热点（WiFi 已连接时也保持开启，便于随时修改配置）：
 
 | 项目 | 值 |
 | --- | --- |
-| 设备名 | `SMSCFG-XXXXXX`，后六位来自 MAC 地址 |
-| Service UUID | `7d6d0001-5f36-4f64-8f2b-ec2a7b3d0101` |
-| 写入 Characteristic | `7d6d0002-5f36-4f64-8f2b-ec2a7b3d0101` |
-| 状态 Characteristic | `7d6d0003-5f36-4f64-8f2b-ec2a7b3d0101` |
+| 热点名称 | `SMSHub-XXXXXX`，后六位来自 MAC 地址 |
+| 配网页 | <http://192.168.4.1> |
+| 热点密码 | 无（局域网内短时开放；正式部署建议后续增加 PIN 码保护） |
 
-可以使用 nRF Connect、LightBlue 等 BLE 调试工具连接并写入 UTF-8 文本。
+### 网页配网（推荐）
 
-### 推荐配置格式
+1. 手机/电脑连接热点 `SMSHub-XXXXXX`（配网等待期间设备指示灯闪烁）。
+2. 浏览器打开 <http://192.168.4.1>。
+3. 选择（或手动输入）WiFi 名称，填写密码。
+4. 填写 SMS Hub 服务器地址：`192.168.1.10` 或 `mqtt://192.168.1.10:1883`；留空表示不修改服务器地址。
+5. 点击"保存并连接"，设备保存配置并尝试连接；成功后自动上报管理台。
 
-同时设置 WiFi 与 SMS Hub 主机：
-
-```text
-SSID|PASSWORD|192.168.1.10
-```
-
-固件会自动生成：
+服务器地址格式：
 
 ```text
-mqtt://192.168.1.10:1883
+192.168.1.10                                  纯主机名，固件自动补全为 mqtt://192.168.1.10:1883
+mqtt://broker.example.com:1883                完整 MQTT 地址
+mqtt://broker.example.com:1883|USER|PASS      认证 Broker（可通过串口命令设置）
 ```
 
-仅修改服务端主机：
+### 串口命令配网
 
-```text
-SERVER|192.168.1.10
-```
+USB 连接电脑，打开串口监视器（波特率 115200），输入：
 
-使用外部 MQTT 或认证 Broker：
-
-```text
-MQTT|mqtt://broker.example.com:1883|USERNAME|PASSWORD
-```
-
-兼容的一次性完整格式：
-
-```text
-SSID|PASSWORD|mqtt://broker.example.com:1883|USERNAME|PASSWORD
-```
-
-### 常见状态返回
-
-| 状态 | 含义 |
+| 命令 | 说明 |
 | --- | --- |
-| `waiting_for_credentials` | 等待写入配置 |
-| `received:SSID:mqtt` | 已收到 WiFi 与 MQTT 配置 |
-| `connecting:SSID` | 正在连接 WiFi |
-| `connected:IP` | WiFi 已连接 |
-| `connect_failed` | WiFi 连接失败 |
-| `server_saved:HOST` | 已保存 SMS Hub 主机 |
-| `mqtt_saved:BROKER` | 已保存 MQTT Broker |
+| `wifi <SSID> <密码>` | 保存并连接 WiFi（密码可留空） |
+| `server <host>` | 保存 SMS Hub 服务器地址 |
+| `status` | 查看 WiFi / 服务器 / 热点状态 |
+| `wifi reset` | 清除已保存的 WiFi 凭据 |
 
-终端成功接入后，应在管理台“终端”页面看到设备在线，并逐步显示号码、ICCID、EID、运营商和信号信息。
+### 接入确认
+
+终端成功接入后，应在管理台"终端"页面看到设备在线，并逐步显示号码、ICCID、EID、运营商和信号信息。
 
 ## 管理台使用流程
 
@@ -300,7 +286,7 @@ SSID|PASSWORD|mqtt://broker.example.com:1883|USERNAME|PASSWORD
 
 如果号码显示为空，部分 SIM/eSIM 可能无法通过模组读取本机号码。此时仍可通过 ICCID、EID 和运营商识别卡片。
 
-终端页同时提供 BLE 接入参数、服务端地址检查、终端诊断入口和 eSIM/命令操作。
+终端页同时提供配网接入参数、服务端地址检查、终端诊断入口和 eSIM/命令操作。
 
 ![SMS Hub 终端管理页面](assets/Terminal.png)
 
@@ -577,7 +563,8 @@ sms_forwarding/
 │   ├── sms_process.*             PDU 接收与长短信合并
 │   ├── sms_queue.*               LittleFS 短信持久队列
 │   ├── terminal_client.*         MQTT 终端协议与命令执行
-│   ├── wifi_manager.*            WiFi 与 BLE 配网
+│   ├── wifi_manager.*            WiFi 连接与 SoftAP 配网
+│   ├── web_config.*              SoftAP 配网页（http://192.168.4.1）
 │   └── esim*                     eUICC Profile / ES10x / APDU
 ├── server/
 │   ├── api/                      Go HTTP API、MQTT Bridge、Broker、SQLite
@@ -630,9 +617,9 @@ environment:
 
 1. ESP32 与服务器是否处于可互通网络。
 2. 服务器防火墙是否放行 TCP `1883`。
-3. BLE 中保存的 Broker 是否为服务器真实 IP，而不是 `localhost`。
+3. 配网页或串口命令中保存的 Broker 是否为服务器真实 IP，而不是 `localhost`。
 4. ESP32 串口是否出现 `MQTT 已连接`。
-5. 设备名是否为预期的 `SMSCFG-XXXXXX`。
+5. 配网热点名称是否为预期的 `SMSHub-XXXXXX`（连接后访问 http://192.168.4.1 可查看/修改配置）。
 
 ### 终端在线，但号码为空
 

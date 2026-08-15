@@ -21,7 +21,7 @@ void setup() {
   loadConfig();
   configValid = isConfigValid();
 
-  // ---- WiFi 连接 / BLE 配网 ----
+  // ---- WiFi 连接 / SoftAP 配网 ----
   connectWiFiOrStartProvisioning();
 
   // ---- 中心服务终端客户端 ----
@@ -78,7 +78,7 @@ void loop() {
   if (!configValid) {
     if (millis() - lastPrintTime >= 1000) {
       lastPrintTime = millis();
-      logCaptureLn(String("请通过 BLE 配置终端参数"));
+      logCaptureLn(String("请连接热点 SMSHub-XXXXXX 并打开 http://192.168.4.1 配置终端参数"));
     }
   }
   checkConcatTimeout();
