@@ -39,7 +39,7 @@ function saveRename(device: Device) {
     <TerminalSetupGuide />
     <div class="card top-gap">
       <table>
-        <thead><tr><th>终端</th><th>状态</th><th>SIM/eSIM</th><th>网络</th><th>资源</th><th>操作</th></tr></thead>
+        <thead><tr><th>终端</th><th>状态</th><th>IP</th><th>SIM/eSIM</th><th>网络</th><th>资源</th><th>操作</th></tr></thead>
         <tbody>
           <tr v-for="device in devices" :key="device.id">
             <td>
@@ -47,6 +47,7 @@ function saveRename(device: Device) {
               <template v-else><b>{{ device.name }}</b><small class="mono">{{ device.deviceId }}</small></template>
             </td>
             <td><span :class="['status', statusClass(device.status)]">{{ device.status === 'online' ? '在线' : '离线' }}</span></td>
+            <td><span class="mono">{{ device.ip || '-' }}</span></td>
             <td><span class="mono">{{ device.iccid || '-' }}</span><small>{{ device.eid || '-' }}</small><small>号码 {{ device.phoneNumber || '-' }}</small></td>
             <td>{{ device.operator || '-' }}<small>RSSI {{ device.rssi }} dBm</small></td>
             <td>Heap {{ device.freeHeapKb }} KB<small>{{ device.uptime }}</small></td>

@@ -1473,6 +1473,7 @@ func (s *Store) RegisterTerminal(req model.TerminalRegisterRequest) (model.Devic
 		device.LastSeenAt = now
 		device.FirmwareVersion = firstNonEmpty(req.FirmwareVersion, device.FirmwareVersion)
 		device.HardwareModel = firstNonEmpty(req.HardwareModel, device.HardwareModel)
+		device.IP = firstNonEmpty(strings.TrimSpace(req.IP), device.IP)
 		if device.Name == "" || device.Name == device.DeviceID {
 			device.Name = firstNonEmpty(req.Name, device.DeviceID)
 		}
@@ -1482,7 +1483,7 @@ func (s *Store) RegisterTerminal(req model.TerminalRegisterRequest) (model.Devic
 		return device, nil
 	}
 	name := firstNonEmpty(req.Name, req.DeviceID)
-	device := model.Device{ID: s.nextIDStringLocked("dev"), DeviceID: req.DeviceID, Name: name, Status: "online", FirmwareVersion: req.FirmwareVersion, HardwareModel: req.HardwareModel, LastSeenAt: now}
+	device := model.Device{ID: s.nextIDStringLocked("dev"), DeviceID: req.DeviceID, Name: name, Status: "online", FirmwareVersion: req.FirmwareVersion, HardwareModel: req.HardwareModel, IP: strings.TrimSpace(req.IP), LastSeenAt: now}
 	s.devices = append(s.devices, device)
 	s.notifyPendingCommandsLocked(device)
 	return device, nil
@@ -1516,6 +1517,7 @@ func (s *Store) Heartbeat(req model.TerminalHeartbeatRequest) (model.Device, err
 		device.PhoneNumber = firstNonEmpty(strings.TrimSpace(req.PhoneNumber), device.PhoneNumber)
 	}
 	device.EID = firstNonEmpty(req.EID, device.EID)
+	device.IP = firstNonEmpty(strings.TrimSpace(req.IP), device.IP)
 	device.RSSI = req.RSSI
 	device.FreeHeapKB = req.FreeHeapKB
 	device.Uptime = firstNonEmpty(req.Uptime, device.Uptime)

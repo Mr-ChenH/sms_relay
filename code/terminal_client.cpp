@@ -221,6 +221,7 @@ static void terminalRegister() {
   doc["name"] = terminalDeviceID();
   doc["firmwareVersion"] = FIRMWARE_VERSION;
   doc["hardwareModel"] = "ESP32-C3 + ML307A";
+  doc["ip"] = WiFi.localIP().toString();
   if (publishJSON("/register", doc, false)) {
     registered = true;
     terminalReportLog("info", "terminal registered");
@@ -238,6 +239,7 @@ static void terminalHeartbeat(bool refreshIdentity = true) {
   doc["iccid"] = cachedICCID;
   doc["eid"] = cachedEID;
   doc["phoneNumber"] = cachedPhoneNumber;
+  doc["ip"] = WiFi.localIP().toString();
   doc["rssi"] = WiFi.RSSI();
   doc["freeHeapKb"] = ESP.getFreeHeap() / 1024;
   doc["uptime"] = String(millis() / 1000) + "s";

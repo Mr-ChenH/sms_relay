@@ -22,6 +22,7 @@ export interface Device {
   eid: string
   operator: string
   phoneNumber: string
+  ip: string
   rssi: number
   freeHeapKb: number
   uptime: string

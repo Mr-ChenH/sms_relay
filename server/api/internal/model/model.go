@@ -19,6 +19,7 @@ type Device struct {
 	EID             string    `json:"eid"`
 	Operator        string    `json:"operator"`
 	PhoneNumber     string    `json:"phoneNumber"`
+	IP              string    `json:"ip"`
 	RSSI            int       `json:"rssi"`
 	FreeHeapKB      int       `json:"freeHeapKb"`
 	Uptime          string    `json:"uptime"`
@@ -322,6 +323,7 @@ type TerminalRegisterRequest struct {
 	Name            string `json:"name"`
 	FirmwareVersion string `json:"firmwareVersion"`
 	HardwareModel   string `json:"hardwareModel"`
+	IP              string `json:"ip"`
 }
 
 type TerminalHeartbeatRequest struct {
@@ -332,6 +334,7 @@ type TerminalHeartbeatRequest struct {
 	EID             string `json:"eid"`
 	Operator        string `json:"operator"`
 	PhoneNumber     string `json:"phoneNumber"`
+	IP              string `json:"ip"`
 	RSSI            int    `json:"rssi"`
 	FreeHeapKB      int    `json:"freeHeapKb"`
 	Uptime          string `json:"uptime"`
