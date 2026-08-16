@@ -52,7 +52,7 @@ const selectedDeviceTasks = computed<EsimOperationTask[]>(() => {
     .filter((task) => task.deviceId === selectedEsimDeviceId.value)
     .map((task) => ({ ...task }))
   const profileCommands: EsimOperationTask[] = commands.value
-    .filter((command) => command.deviceId === selectedEsimDeviceId.value && ['esim_enable_profile', 'esim_delete_profile'].includes(command.type))
+    .filter((command) => command.deviceId === selectedEsimDeviceId.value && ['esim_enable_profile', 'esim_delete_profile', 'esim_refresh_profiles'].includes(command.type))
     .map((command) => commandOperationTask(command))
   return [...downloads, ...profileCommands].sort((a, b) => {
     const timeDiff = new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime()
@@ -92,6 +92,7 @@ const esimTaskForm = ref({ activationCode: '', smdpAddress: '', confirmationCode
 const esimTaskResult = ref('')
 const esimCommandResult = ref('')
 const showEsimTaskDialog = ref(false)
+const profileRefreshBusy = ref(false)
 const profileCommandBusy = ref<Record<string, boolean>>({})
 const toolDeviceId = ref('')
 const toolATCommand = ref('AT+CSQ')
@@ -469,12 +470,12 @@ function esimStatusLabel(status: string) {
 }
 
 function esimCommandLabel(type: string) {
-  const labels: Record<string, string> = { esim_download_profile: '下载 Profile', esim_enable_profile: '启用 Profile', esim_delete_profile: '删除 Profile' }
+  const labels: Record<string, string> = { esim_download_profile: '下载 Profile', esim_enable_profile: '启用 Profile', esim_delete_profile: '删除 Profile', esim_refresh_profiles: '刷新 Profile' }
   return labels[type] || type.replaceAll('_', ' ')
 }
 
 function esimTaskLabel(type: string) {
-  const labels: Record<string, string> = { download_profile: '添加 eSIM', esim_enable_profile: '启用 Profile', esim_delete_profile: '删除 Profile' }
+  const labels: Record<string, string> = { download_profile: '添加 eSIM', esim_enable_profile: '启用 Profile', esim_delete_profile: '删除 Profile', esim_refresh_profiles: '刷新 Profile' }
   return labels[type] || type.replaceAll('_', ' ')
 }
 
@@ -515,7 +516,8 @@ function commandOperationTask(command: DeviceCommand): EsimOperationTask {
   const progress = ['succeeded', 'success', 'completed'].includes(status) ? 100 : status === 'claimed' ? 45 : status === 'failed' ? 0 : 10
   const stages: Record<string, Record<string, string>> = {
     esim_enable_profile: { pending: '等待终端领取启用命令', claimed: '终端正在切换并验证 Profile', succeeded: 'Profile 已启用并验证', success: 'Profile 已启用并验证', completed: 'Profile 已启用并验证', failed: command.result || 'Profile 启用失败' },
-    esim_delete_profile: { pending: '等待终端领取删除命令', claimed: '终端正在删除 Profile', succeeded: 'Profile 已删除', success: 'Profile 已删除', completed: 'Profile 已删除', failed: command.result || 'Profile 删除失败' }
+    esim_delete_profile: { pending: '等待终端领取删除命令', claimed: '终端正在删除 Profile', succeeded: 'Profile 已删除', success: 'Profile 已删除', completed: 'Profile 已删除', failed: command.result || 'Profile 删除失败' },
+    esim_refresh_profiles: { pending: '等待终端领取刷新命令', claimed: '终端正在读取 eUICC Profile', succeeded: 'Profile 已刷新', success: 'Profile 已刷新', completed: 'Profile 已刷新', failed: command.result || 'Profile 刷新失败' }
   }
   return {
     id: command.id,
@@ -546,6 +548,21 @@ function profileCommandLabel(profile: EsimProfile) {
   if (profile.state === 'enabled') return '当前启用'
   if (profileCommandBusy.value[profile.id] || profileHasActiveCommand(profile)) return '执行中'
   return '切换/启用'
+}
+
+async function refreshTerminalProfiles() {
+  if (!selectedEsimDevice.value || selectedEsimDevice.value.status !== 'online' || profileRefreshBusy.value) return
+  profileRefreshBusy.value = true
+  esimCommandResult.value = ''
+  try {
+    const command = await api.post<DeviceCommand>('/api/admin/commands', { deviceId: selectedEsimDevice.value.id, type: 'esim_refresh_profiles', payload: {} })
+    commands.value = [command, ...commands.value.filter((item) => item.id !== command.id)]
+    esimCommandResult.value = `刷新命令 ${command.id} 已创建，终端读取完成后会自动更新列表。`
+  } catch (err) {
+    esimCommandResult.value = err instanceof Error ? `Profile 刷新失败：${err.message}` : 'Profile 刷新失败'
+  } finally {
+    profileRefreshBusy.value = false
+  }
 }
 
 async function createProfileCommand(profile: EsimProfile, type: string) {
@@ -1011,7 +1028,7 @@ onBeforeUnmount(() => {
         <section v-if="!loading && page === 'esim'" class="page esim-page">
           <div class="page-head">
             <div><h1>eSIM</h1><p>管理终端的 eUICC Profile、下载任务和切换记录。</p></div>
-            <button class="btn" @click="loadAll()">刷新状态</button>
+            <div class="toolbar"><button class="btn" @click="loadAll()">刷新页面</button><button class="btn primary" :disabled="!selectedEsimDevice || selectedEsimDevice.status !== 'online' || profileRefreshBusy" @click="refreshTerminalProfiles">{{ profileRefreshBusy ? '提交中' : '读取终端 Profile' }}</button></div>
           </div>
 
           <div class="card esim-device-bar">
@@ -1020,7 +1037,8 @@ onBeforeUnmount(() => {
               <div class="esim-device-stat"><span>状态</span><b><span :class="['status', statusClass(selectedEsimDevice.status)]">{{ selectedEsimDevice.status === 'online' ? '在线' : '离线' }}</span></b></div>
               <div class="esim-device-stat"><span>当前号码</span><b class="mono">{{ selectedEsimDevice.phoneNumber || '-' }}</b></div>
               <div class="esim-device-stat"><span>运营商</span><b>{{ selectedEsimDevice.operator || '-' }}</b></div>
-              <div class="esim-device-stat"><span>信号</span><b><span :class="['status', signalStatusClass(selectedEsimDevice.rssi)]">{{ signalLabel(selectedEsimDevice.rssi) }}<template v-if="selectedEsimDevice.rssi && selectedEsimDevice.rssi < 0"> · {{ selectedEsimDevice.rssi }} dBm</template></span></b></div>
+              <div class="esim-device-stat"><span>Wi-Fi 信号</span><b><span :class="['status', signalStatusClass(selectedEsimDevice.rssi)]">{{ signalLabel(selectedEsimDevice.rssi) }}<template v-if="selectedEsimDevice.rssi && selectedEsimDevice.rssi < 0"> · {{ selectedEsimDevice.rssi }} dBm</template></span></b></div>
+              <div class="esim-device-stat"><span>蜂窝信号</span><b><span :class="['status', signalStatusClass(selectedEsimDevice.cellularRssi)]">{{ signalLabel(selectedEsimDevice.cellularRssi) }}<template v-if="selectedEsimDevice.cellularRssi && selectedEsimDevice.cellularRssi < 0"> · {{ selectedEsimDevice.cellularRssi }} dBm / CSQ {{ selectedEsimDevice.cellularCsq }}</template></span></b></div>
               <div class="esim-device-stat esim-device-secondary"><span>当前 ICCID</span><b class="mono">{{ selectedEsimDevice.iccid || '-' }}</b></div>
               <div class="esim-device-stat esim-device-secondary"><span>EID</span><b class="mono">{{ selectedEsimDevice.eid || '-' }}</b></div>
             </template>

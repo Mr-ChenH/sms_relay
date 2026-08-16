@@ -135,7 +135,8 @@ async function copyCommand(command: DeviceCommand) {
         <div class="tools-device-stat"><span>状态</span><b><span :class="['status', statusClass(selectedDevice.status)]">{{ selectedDevice.status === 'online' ? '在线' : '离线' }}</span></b></div>
         <div class="tools-device-stat"><span>当前号码</span><b class="mono">{{ selectedDevice.phoneNumber || '-' }}</b></div>
         <div class="tools-device-stat"><span>运营商</span><b>{{ selectedDevice.operator || '-' }}</b></div>
-        <div class="tools-device-stat"><span>信号</span><b>{{ selectedDevice.rssi && selectedDevice.rssi < 0 ? `${selectedDevice.rssi} dBm` : '未知' }}</b></div>
+        <div class="tools-device-stat"><span>Wi-Fi 信号</span><b>{{ selectedDevice.rssi && selectedDevice.rssi < 0 ? `${selectedDevice.rssi} dBm` : '未知' }}</b></div>
+        <div class="tools-device-stat"><span>蜂窝信号</span><b>{{ selectedDevice.cellularRssi && selectedDevice.cellularRssi < 0 ? `${selectedDevice.cellularRssi} dBm · CSQ ${selectedDevice.cellularCsq}` : '未知' }}</b></div>
         <div class="tools-device-stat"><span>ICCID</span><b class="mono">{{ selectedDevice.iccid || '-' }}</b></div>
         <div class="tools-device-stat"><span>执行中</span><b>{{ runningCount }}</b></div>
       </template>
@@ -162,7 +163,7 @@ async function copyCommand(command: DeviceCommand) {
         <div class="card-head"><div><b>常用诊断</b><small>只读查询与网络连通性测试</small></div></div>
         <div class="tools-actions-grid">
           <button class="tools-action" type="button" @click="run('at_command', { command: 'ATI' })"><b>模组信息</b><span>执行 ATI，读取厂商与型号</span></button>
-          <button class="tools-action" type="button" @click="run('query_signal')"><b>信号质量</b><span>查询 RSSI 与信号状态</span></button>
+          <button class="tools-action" type="button" @click="run('query_signal')"><b>蜂窝信号质量</b><span>通过 AT+CSQ 查询蜂窝 RSSI</span></button>
           <button class="tools-action" type="button" @click="run('query_sim')"><b>SIM 信息</b><span>查询 ICCID、卡状态与号码</span></button>
           <button class="tools-action" type="button" @click="run('query_network')"><b>网络状态</b><span>查询运营商与注册状态</span></button>
         </div>

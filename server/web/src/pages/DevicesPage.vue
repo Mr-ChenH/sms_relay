@@ -49,7 +49,7 @@ function saveRename(device: Device) {
             <td><span :class="['status', statusClass(device.status)]">{{ device.status === 'online' ? '在线' : '离线' }}</span></td>
             <td><span class="mono">{{ device.ip || '-' }}</span></td>
             <td><span class="mono">{{ device.iccid || '-' }}</span><small>{{ device.eid || '-' }}</small><small>号码 {{ device.phoneNumber || '-' }}</small></td>
-            <td>{{ device.operator || '-' }}<small>RSSI {{ device.rssi }} dBm</small></td>
+            <td>{{ device.operator || '-' }}<small>Wi-Fi {{ device.rssi && device.rssi < 0 ? `${device.rssi} dBm` : '未知' }}</small><small>蜂窝 {{ device.cellularRssi && device.cellularRssi < 0 ? `${device.cellularRssi} dBm · CSQ ${device.cellularCsq}` : '未知' }}</small></td>
             <td>Heap {{ device.freeHeapKb }} KB<small>{{ device.uptime }}</small></td>
             <td><button class="btn small" :disabled="savingId === device.id" @click="startRename(device)">改名</button><button class="btn small primary" @click="emit('openEsim', device.id)">eSIM</button><button class="btn small" @click="emit('openTools', device.id)">命令</button></td>
           </tr>

@@ -83,7 +83,8 @@ const emit = defineEmits<{
               <div><dt>当前号码</dt><dd class="mono">{{ selectedDevice.phoneNumber || '未上报' }}</dd></div>
               <div><dt>运营商</dt><dd>{{ selectedDevice.operator || '未上报' }}</dd></div>
               <div><dt>ICCID</dt><dd class="mono">{{ selectedDevice.iccid || '未上报' }}</dd></div>
-              <div><dt>信号</dt><dd>{{ selectedDevice.rssi && selectedDevice.rssi < 0 ? `${selectedDevice.rssi} dBm` : '未知' }}</dd></div>
+              <div><dt>Wi-Fi 信号</dt><dd>{{ selectedDevice.rssi && selectedDevice.rssi < 0 ? `${selectedDevice.rssi} dBm` : '未知' }}</dd></div>
+              <div><dt>蜂窝信号</dt><dd>{{ selectedDevice.cellularRssi && selectedDevice.cellularRssi < 0 ? `${selectedDevice.cellularRssi} dBm · CSQ ${selectedDevice.cellularCsq}` : '未知' }}</dd></div>
               <div class="send-device-last-seen"><dt>最后在线</dt><dd>{{ formatLastSeen(selectedDevice.lastSeenAt) }}</dd></div>
             </dl>
             <p v-if="selectedDevice.status !== 'online'" class="send-device-warning">终端当前离线，任务创建后将等待终端上线领取。</p>

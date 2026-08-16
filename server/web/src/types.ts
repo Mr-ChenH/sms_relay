@@ -24,6 +24,8 @@ export interface Device {
   phoneNumber: string
   ip: string
   rssi: number
+  cellularRssi: number
+  cellularCsq: number
   freeHeapKb: number
   uptime: string
   lastSeenAt: string

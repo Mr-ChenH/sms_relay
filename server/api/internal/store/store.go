@@ -1469,6 +1469,7 @@ func (s *Store) RegisterTerminal(req model.TerminalRegisterRequest) (model.Devic
 	}
 	now := time.Now()
 	if device, ok := s.findDeviceLocked(req.DeviceID); ok {
+		wasOffline := device.Status != "online" || deviceStatusAt(device, now) == "offline"
 		device.Status = "online"
 		device.LastSeenAt = now
 		device.FirmwareVersion = firstNonEmpty(req.FirmwareVersion, device.FirmwareVersion)
@@ -1478,6 +1479,9 @@ func (s *Store) RegisterTerminal(req model.TerminalRegisterRequest) (model.Devic
 			device.Name = firstNonEmpty(req.Name, device.DeviceID)
 		}
 		s.upsertDeviceLocked(device)
+		if wasOffline {
+			s.appendDeviceStatusLogLocked(device, "online", now)
+		}
 		s.retryStaleCommandsLocked(device, now)
 		s.notifyPendingCommandsLocked(device)
 		return device, nil
@@ -1496,6 +1500,7 @@ func (s *Store) Heartbeat(req model.TerminalHeartbeatRequest) (model.Device, err
 
 	now := time.Now()
 	device, ok := s.findDeviceLocked(req.DeviceID)
+	wasOffline := !ok || device.Status != "online" || deviceStatusAt(device, now) == "offline"
 	if !ok {
 		device = model.Device{ID: s.nextIDStringLocked("dev"), DeviceID: req.DeviceID, Name: req.DeviceID}
 	}
@@ -1519,9 +1524,14 @@ func (s *Store) Heartbeat(req model.TerminalHeartbeatRequest) (model.Device, err
 	device.EID = firstNonEmpty(req.EID, device.EID)
 	device.IP = firstNonEmpty(strings.TrimSpace(req.IP), device.IP)
 	device.RSSI = req.RSSI
+	device.CellularRSSI = req.CellularRSSI
+	device.CellularCSQ = req.CellularCSQ
 	device.FreeHeapKB = req.FreeHeapKB
 	device.Uptime = firstNonEmpty(req.Uptime, device.Uptime)
 	s.upsertDeviceLocked(device)
+	if wasOffline {
+		s.appendDeviceStatusLogLocked(device, "online", now)
+	}
 	s.updateEnabledProfileLocked(device)
 	s.reconcileProfileCommandsLocked(device, now)
 	s.retryStaleCommandsLocked(device, now)
@@ -1534,13 +1544,18 @@ func (s *Store) MarkTerminalOnline(deviceID string) error {
 	defer s.mu.Unlock()
 	defer s.persistLocked()
 
+	now := time.Now()
 	device, ok := s.findDeviceLocked(deviceID)
 	if !ok {
 		device = model.Device{ID: s.nextIDStringLocked("dev"), DeviceID: deviceID, Name: deviceID}
 	}
+	wasOffline := device.Status != "online" || deviceStatusAt(device, now) == "offline"
 	device.Status = "online"
-	device.LastSeenAt = time.Now()
+	device.LastSeenAt = now
 	s.upsertDeviceLocked(device)
+	if wasOffline {
+		s.appendDeviceStatusLogLocked(device, "online", now)
+	}
 	return nil
 }
 
@@ -1553,8 +1568,11 @@ func (s *Store) MarkTerminalOffline(deviceID string) error {
 	if !ok {
 		return errors.New("device not found")
 	}
-	device.Status = "offline"
-	s.upsertDeviceLocked(device)
+	if device.Status != "offline" {
+		device.Status = "offline"
+		s.upsertDeviceLocked(device)
+		s.appendDeviceStatusLogLocked(device, "offline", time.Now())
+	}
 	return nil
 }
 
@@ -1737,10 +1755,30 @@ func (s *Store) refreshDeviceStatusesLocked(now time.Time) bool {
 		current := deviceStatusAt(s.devices[i], now)
 		if s.devices[i].Status != current {
 			s.devices[i].Status = current
+			s.appendDeviceStatusLogLocked(s.devices[i], current, now)
 			changed = true
 		}
 	}
 	return changed
+}
+
+func (s *Store) appendDeviceStatusLogLocked(device model.Device, status string, now time.Time) {
+	message := "terminal online"
+	level := "info"
+	if status == "offline" {
+		message = "terminal offline"
+		level = "warn"
+		if !device.LastSeenAt.IsZero() {
+			message += fmt.Sprintf("; last heartbeat %s ago", now.Sub(device.LastSeenAt).Round(time.Second))
+		}
+	}
+	if device.IP != "" {
+		message += "; ip=" + device.IP
+	}
+	if device.RSSI < 0 {
+		message += fmt.Sprintf("; wifi=%d dBm", device.RSSI)
+	}
+	s.logs = append([]model.LogEntry{{ID: s.nextIDStringLocked("log"), DeviceID: device.ID, DeviceName: firstNonEmpty(device.Name, device.DeviceID), Level: level, Message: message, CreatedAt: now}}, s.logs...)
 }
 
 func devicesWithCurrentStatus(devices []model.Device, now time.Time) []model.Device {

@@ -10,6 +10,7 @@
 #include <ArduinoJson.h>
 #include <WiFiClient.h>
 #include <PubSubClient.h>
+#include <new>
 
 #ifndef SMS_HUB_DEFAULT_API_BASE_URL
 #define SMS_HUB_DEFAULT_API_BASE_URL ""
@@ -19,13 +20,12 @@
 #define SMS_HUB_DEVICE_ID ""
 #endif
 
-static const unsigned long REGISTER_INTERVAL_MS = 300000;
 static const unsigned long HEARTBEAT_INTERVAL_MS = 5000;
 static const unsigned long LOG_FLUSH_INTERVAL_MS = 15000;
 static const unsigned long MQTT_RECONNECT_INTERVAL_MS = 5000;
-static const unsigned long ESIM_PROFILE_SYNC_RETRY_MS = 5000;
+static const unsigned long ESIM_PROFILE_SYNC_RETRY_MS = 60000;
+static const unsigned long ESIM_INIT_RETRY_MS = 60000;
 static const uint16_t MQTT_KEEPALIVE_SECONDS = 20;
-static const unsigned long ESIM_PROFILE_SYNC_INTERVAL_MS = 300000;
 static const unsigned long IDENTITY_REFRESH_INTERVAL_MS = 300000;
 static const unsigned long IDENTITY_SETTLE_INTERVAL_MS = 10000;
 static const unsigned long IDENTITY_SETTLE_WINDOW_MS = 120000;
@@ -61,15 +61,18 @@ static String cachedICCID;
 static String cachedEID;
 static String cachedOperator;
 static String cachedPhoneNumber;
+static int cachedCellularCSQ = 99;
+static int cachedCellularRSSI = 0;
 static unsigned long lastIdentityRefreshAt = 0;
 static unsigned long identitySettleUntil = 0;
 
 static bool registered = false;
 static bool esimProfileSyncPending = false;
-static unsigned long lastRegisterAt = 0;
 static unsigned long lastHeartbeatAt = 0;
 static unsigned long lastLogFlushAt = 0;
 static unsigned long lastEsimProfileSyncAt = 0;
+static unsigned long lastEsimInitRetryAt = 0;
+static String lastEsimSyncError;
 static String logQueue[MAX_LOG_QUEUE];
 static size_t logQueueSize = 0;
 
@@ -181,6 +184,20 @@ static String parseMCCID(const String& resp) {
   return value;
 }
 
+static int parseCSQ(const String& resp) {
+  int idx = resp.indexOf("+CSQ:");
+  if (idx < 0) return 99;
+  int pos = idx + 5;
+  while (pos < resp.length() && (resp.charAt(pos) == ' ' || resp.charAt(pos) == '\r' || resp.charAt(pos) == '\n')) pos++;
+  int value = 0;
+  bool digits = false;
+  while (pos < resp.length() && isdigit((unsigned char)resp.charAt(pos))) {
+    value = value * 10 + resp.charAt(pos++) - '0';
+    digits = true;
+  }
+  return digits && value >= 0 && value <= 31 ? value : 99;
+}
+
 static void refreshIdentityCache(bool force = false) {
   unsigned long now = millis();
   unsigned long interval = identitySettleUntil > 0 && (long)(identitySettleUntil - now) > 0
@@ -195,10 +212,13 @@ static void refreshIdentityCache(bool force = false) {
   cachedICCID = parseMCCID(sendATCommand("AT+MCCID", 3000));
   cachedOperator = parseOperatorName(sendATCommand("AT+COPS?", 5000));
   cachedPhoneNumber = parsePhoneNumber(sendATCommand("AT+CNUM", 3000));
+  cachedCellularCSQ = parseCSQ(sendATCommand("AT+CSQ", 3000));
+  cachedCellularRSSI = cachedCellularCSQ == 99 ? 0 : -113 + 2 * cachedCellularCSQ;
 
   if (cachedICCID.length() == 0 && esimReady) {
     // 兜底：AT+MCCID 读不到时，从 eUICC 已启用 Profile 取 ICCID
-    ESimProfile profiles[10];
+    ESimProfile* profiles = new (std::nothrow) ESimProfile[10];
+    if (!profiles) return;
     int count = esimGetProfiles(profiles, 10);
     if (count >= 0) {
       for (int i = 0; i < count; i++) {
@@ -209,6 +229,7 @@ static void refreshIdentityCache(bool force = false) {
         }
       }
     }
+    delete[] profiles;
   }
   // 注意：EID 属慢速 eUICC 查询，由 terminalSyncEsimProfiles 顺带填充，
   // 不在此处阻塞号码/运营商上报。
@@ -226,7 +247,6 @@ static void terminalRegister() {
     registered = true;
     terminalReportLog("info", "terminal registered");
   }
-  lastRegisterAt = millis();
 }
 
 static void terminalHeartbeat(bool refreshIdentity = true) {
@@ -241,6 +261,8 @@ static void terminalHeartbeat(bool refreshIdentity = true) {
   doc["phoneNumber"] = cachedPhoneNumber;
   doc["ip"] = WiFi.localIP().toString();
   doc["rssi"] = WiFi.RSSI();
+  doc["cellularRssi"] = cachedCellularRSSI;
+  doc["cellularCsq"] = cachedCellularCSQ;
   doc["freeHeapKb"] = ESP.getFreeHeap() / 1024;
   doc["uptime"] = String(millis() / 1000) + "s";
   if (publishJSON("/heartbeat", doc, false)) lastHeartbeatAt = millis();
@@ -339,14 +361,47 @@ static String profileStateName(int state) {
 }
 
 void terminalSyncEsimProfiles() {
-  ESimProfile profiles[10];
-  int count = esimGetProfiles(profiles, 10);
-  if (count < 0) {
+  if (!esimReady) {
+    unsigned long now = millis();
+    if (lastEsimInitRetryAt == 0 || now - lastEsimInitRetryAt >= ESIM_INIT_RETRY_MS) {
+      lastEsimInitRetryAt = now;
+      if (esimInit()) {
+        lastEsimSyncError = "";
+        terminalReportLog("info", "eUICC recovered and initialized");
+      }
+    }
+    if (!esimReady) {
+      esimProfileSyncPending = true;
+      String error = String("esim profile sync paused: ") + esimGetLastError();
+      if (error != lastEsimSyncError) {
+        terminalReportLog("warn", error);
+        lastEsimSyncError = error;
+      }
+      lastEsimProfileSyncAt = now;
+      return;
+    }
+  }
+
+  ESimProfile* profiles = new (std::nothrow) ESimProfile[10];
+  if (!profiles) {
     esimProfileSyncPending = true;
-    terminalReportLog("warn", String("esim profile sync failed: ") + esimGetLastError());
+    terminalReportLog("error", "esim profile sync skipped: insufficient heap");
     lastEsimProfileSyncAt = millis();
     return;
   }
+  int count = esimGetProfiles(profiles, 10);
+  if (count < 0) {
+    delete[] profiles;
+    esimProfileSyncPending = true;
+    String error = String("esim profile sync failed: ") + esimGetLastError();
+    if (error != lastEsimSyncError) {
+      terminalReportLog("warn", error);
+      lastEsimSyncError = error;
+    }
+    lastEsimProfileSyncAt = millis();
+    return;
+  }
+  lastEsimSyncError = "";
 
   // 顺带填充慢速 eUICC 查询的 EID（不阻塞号码/运营商上报路径）
   if (esimReady) {
@@ -373,6 +428,7 @@ void terminalSyncEsimProfiles() {
   } else {
     esimProfileSyncPending = true;
   }
+  delete[] profiles;
   lastEsimProfileSyncAt = millis();
 }
 
@@ -464,6 +520,15 @@ static bool executeCommand(const String& type, JsonVariantConst payload, String&
     String setResp = sendATCommand(airplane ? "AT+CFUN=1" : "AT+CFUN=4", 5000);
     result += "\n" + setResp;
     return atResponseSucceeded(setResp);
+  }
+  if (type == "esim_refresh_profiles") {
+    terminalSyncEsimProfiles();
+    if (esimProfileSyncPending) {
+      result = String("profile refresh failed: ") + esimGetLastError();
+      return false;
+    }
+    result = "profiles refreshed";
+    return true;
   }
   if (type == "esim_enable_profile") {
     String id = commandString(payload, "iccid");
@@ -789,8 +854,7 @@ void terminalClientLoop() {
     terminalSyncEsimProfiles();
   }
   unsigned long now = millis();
-  if (!registered || (lastRegisterAt > 0 && now - lastRegisterAt > REGISTER_INTERVAL_MS)) terminalRegister();
-  if (now - lastEsimProfileSyncAt > ESIM_PROFILE_SYNC_INTERVAL_MS) terminalSyncEsimProfiles();
+  if (!registered) terminalRegister();
   unsigned long identityInterval = identitySettleUntil > 0 && (long)(identitySettleUntil - now) > 0
                                      ? IDENTITY_SETTLE_INTERVAL_MS
                                      : IDENTITY_REFRESH_INTERVAL_MS;

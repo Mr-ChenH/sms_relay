@@ -8,6 +8,8 @@
 #include "sms_process.h"
 #include "esim.h"
 
+SET_LOOP_TASK_STACK_SIZE(16 * 1024);
+
 void setup() {
   pinMode(LED_BUILTIN, OUTPUT);
   digitalWrite(LED_BUILTIN, HIGH);

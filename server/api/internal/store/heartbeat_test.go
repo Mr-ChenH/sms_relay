@@ -1,6 +1,7 @@
 package store
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -19,6 +20,36 @@ func TestDeviceStatusAllowsBriefHeartbeatGap(t *testing.T) {
 	}
 }
 
+func TestDeviceStatusTransitionLogsOnce(t *testing.T) {
+	s := newEsimTaskTestStore(t)
+	now := time.Now()
+	s.devices = []model.Device{{ID: "dev-1", DeviceID: "esp32-test", Name: "Terminal", Status: "online", IP: "172.16.0.108", RSSI: -78, LastSeenAt: now.Add(-deviceOnlineTimeout - time.Second)}}
+
+	if devices := s.Devices(); devices[0].Status != "offline" {
+		t.Fatalf("device status = %q, want offline", devices[0].Status)
+	}
+	if len(s.logs) != 1 || s.logs[0].Level != "warn" || !strings.Contains(s.logs[0].Message, "terminal offline") {
+		t.Fatalf("offline transition log = %+v", s.logs)
+	}
+	_ = s.Devices()
+	if len(s.logs) != 1 {
+		t.Fatalf("repeated status reads should not duplicate logs: %+v", s.logs)
+	}
+
+	if _, err := s.Heartbeat(model.TerminalHeartbeatRequest{DeviceID: "esp32-test", IP: "172.16.0.108", RSSI: -72}); err != nil {
+		t.Fatal(err)
+	}
+	if len(s.logs) != 2 || s.logs[0].Level != "info" || !strings.Contains(s.logs[0].Message, "terminal online") {
+		t.Fatalf("online transition log = %+v", s.logs)
+	}
+	if _, err := s.Heartbeat(model.TerminalHeartbeatRequest{DeviceID: "esp32-test", RSSI: -72}); err != nil {
+		t.Fatal(err)
+	}
+	if len(s.logs) != 2 {
+		t.Fatalf("normal heartbeat should not duplicate online logs: %+v", s.logs)
+	}
+}
+
 func TestHeartbeatReplacesProfileIdentityFields(t *testing.T) {
 	s := &Store{devices: []model.Device{{
 		ID:          "dev-1",
@@ -29,14 +60,19 @@ func TestHeartbeatReplacesProfileIdentityFields(t *testing.T) {
 	}}}
 
 	device, err := s.Heartbeat(model.TerminalHeartbeatRequest{
-		DeviceID: "esp32-test",
-		ICCID:    "new-iccid",
+		DeviceID:     "esp32-test",
+		ICCID:        "new-iccid",
+		CellularRSSI: -85,
+		CellularCSQ:  14,
 	})
 	if err != nil {
 		t.Fatalf("Heartbeat() error = %v", err)
 	}
 	if device.ICCID != "new-iccid" {
 		t.Fatalf("ICCID = %q, want new-iccid", device.ICCID)
+	}
+	if device.CellularRSSI != -85 || device.CellularCSQ != 14 {
+		t.Fatalf("cellular signal = %d dBm / CSQ %d, want -85 / 14", device.CellularRSSI, device.CellularCSQ)
 	}
 	if device.Operator != "" {
 		t.Fatalf("Operator = %q, want empty while new profile registers", device.Operator)

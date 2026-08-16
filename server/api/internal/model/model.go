@@ -21,6 +21,8 @@ type Device struct {
 	PhoneNumber     string    `json:"phoneNumber"`
 	IP              string    `json:"ip"`
 	RSSI            int       `json:"rssi"`
+	CellularRSSI    int       `json:"cellularRssi"`
+	CellularCSQ     int       `json:"cellularCsq"`
 	FreeHeapKB      int       `json:"freeHeapKb"`
 	Uptime          string    `json:"uptime"`
 	LastSeenAt      time.Time `json:"lastSeenAt"`
@@ -336,6 +338,8 @@ type TerminalHeartbeatRequest struct {
 	PhoneNumber     string `json:"phoneNumber"`
 	IP              string `json:"ip"`
 	RSSI            int    `json:"rssi"`
+	CellularRSSI    int    `json:"cellularRssi"`
+	CellularCSQ     int    `json:"cellularCsq"`
 	FreeHeapKB      int    `json:"freeHeapKb"`
 	Uptime          string `json:"uptime"`
 }
