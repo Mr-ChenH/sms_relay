@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
-import type { Device, DeviceCommand } from '../types'
+import { computed, onMounted, ref, watch } from 'vue'
+import { api } from '../api'
+import type { Device, DeviceCommand, FirmwareImage } from '../types'
 import PaginationBar from '../components/PaginationBar.vue'
 import { statusClass } from '../utils/ui'
 
@@ -19,6 +20,11 @@ const commandFilter = ref('all')
 const commandPage = ref(1)
 const commandPageSize = ref(10)
 const copiedId = ref('')
+const firmware = ref<FirmwareImage | null>(null)
+const firmwareFile = ref<File | null>(null)
+const firmwareBusy = ref(false)
+const firmwareResult = ref('')
+const allowFirmwareReinstall = ref(false)
 
 const emit = defineEmits<{
   runCommand: [type: string, payload?: Record<string, unknown>]
@@ -43,6 +49,7 @@ const failureCount = computed(() => deviceCommands.value.filter((command) => ['f
 const activeCommand = computed(() => deviceCommands.value.find((command) => command.id === activeCommandId.value) || deviceCommands.value[0] || null)
 const activeCommandRunning = computed(() => activeCommand.value && ['pending', 'claimed', 'running'].includes(activeCommand.value.status))
 const offline = computed(() => selectedDevice.value?.status !== 'online')
+const firmwareSameVersion = computed(() => !!firmware.value && firmware.value.version === selectedDevice.value?.firmwareVersion)
 
 watch(deviceId, () => {
   activeCommandId.value = deviceCommands.value[0]?.id || ''
@@ -71,7 +78,7 @@ function statusLabel(status: string) {
 function commandLabel(type: string) {
   const labels: Record<string, string> = {
     at_command: 'AT 指令', query_signal: '查询信号', query_sim: '查询 SIM', query_network: '查询网络',
-    ping: '网络 Ping', modem_airplane_toggle: '切换飞行模式', modem_hardreset: '模组硬重启'
+    ping: '网络 Ping', modem_airplane_toggle: '切换飞行模式', modem_hardreset: '模组硬重启', firmware_update: '固件升级'
   }
   return labels[type] || type.replaceAll('_', ' ')
 }
@@ -111,6 +118,61 @@ function runPing() {
 function confirmDanger(type: string, message: string) {
   if (window.confirm(message)) run(type)
 }
+
+function formatBytes(value: number) {
+  return value >= 1024 * 1024 ? `${(value / 1024 / 1024).toFixed(2)} MB` : `${(value / 1024).toFixed(1)} KB`
+}
+
+async function loadFirmware() {
+  try {
+    firmware.value = await api.get<FirmwareImage | null>('/api/admin/firmware')
+  } catch (error) {
+    firmwareResult.value = error instanceof Error ? error.message : '无法读取固件信息'
+  }
+}
+
+function selectFirmware(event: Event) {
+  firmwareFile.value = (event.target as HTMLInputElement).files?.[0] || null
+}
+
+async function uploadFirmware() {
+  if (!firmwareFile.value) return
+  firmwareBusy.value = true
+  firmwareResult.value = ''
+  try {
+    const form = new FormData()
+    form.set('firmware', firmwareFile.value)
+    firmware.value = await api.upload<FirmwareImage>('/api/admin/firmware', form)
+    firmwareResult.value = `固件 ${firmware.value.version} 已上传并完成 SHA-256 校验`
+  } catch (error) {
+    firmwareResult.value = error instanceof Error ? error.message : '固件上传失败'
+  } finally {
+    firmwareBusy.value = false
+  }
+}
+
+async function deployFirmware() {
+  if (!selectedDevice.value || !firmware.value) return
+  const action = firmwareSameVersion.value ? '重新安装' : '升级'
+  if (!window.confirm(`确认将终端 ${selectedDevice.value.name} ${action}到固件 ${firmware.value.version}？终端完成校验后会自动重启。`)) return
+  firmwareBusy.value = true
+  firmwareResult.value = ''
+  try {
+    const command = await api.post<DeviceCommand>('/api/admin/firmware/deploy', {
+      deviceId: selectedDevice.value.id,
+      allowDowngrade: allowFirmwareReinstall.value
+    })
+    activeCommandId.value = command.id
+    firmwareResult.value = `升级命令 ${command.id} 已下发`
+    emit('refresh')
+  } catch (error) {
+    firmwareResult.value = error instanceof Error ? error.message : '升级命令下发失败'
+  } finally {
+    firmwareBusy.value = false
+  }
+}
+
+onMounted(loadFirmware)
 
 async function copyCommand(command: DeviceCommand) {
   const content = `${formatTime(command.createdAt)} [${command.status}] ${command.type}\n参数: ${formatPayload(command)}\n结果: ${command.result || '-'}`
@@ -175,6 +237,30 @@ async function copyCommand(command: DeviceCommand) {
         <div class="tools-at-body"><label>AT 指令</label><div class="tools-at-input"><input v-model="atCommand" class="field mono" placeholder="AT+CSQ" @keydown.enter="runAT"><button class="btn primary" :disabled="!deviceId || !atCommand.trim()" @click="runAT">发送</button></div><div class="tools-at-presets"><button class="btn small" @click="atCommand = 'AT+CSQ'">AT+CSQ</button><button class="btn small" @click="atCommand = 'AT+COPS?'">AT+COPS?</button><button class="btn small" @click="atCommand = 'AT+CPIN?'">AT+CPIN?</button><button class="btn small" @click="atCommand = 'AT+CREG?'">AT+CREG?</button></div><p class="tools-safety-note">AT 指令会直接影响模组状态，请确认指令含义后发送。</p></div>
       </section>
     </div>
+
+    <section class="card tools-firmware-panel top-gap">
+      <div class="card-head"><div><b>终端固件</b><small>中心托管与 WiFi OTA</small></div><span :class="['status', firmware ? 'ok' : 'gray']">{{ firmware ? firmware.version : '未上传' }}</span></div>
+      <div class="tools-firmware-grid">
+        <div class="tools-firmware-current">
+          <span>当前终端</span><b>{{ selectedDevice?.firmwareVersion || '-' }}</b>
+          <small>{{ selectedDevice?.name || '未选择终端' }}</small>
+        </div>
+        <div class="tools-firmware-current">
+          <span>中心固件</span><b>{{ firmware?.version || '-' }}</b>
+          <small v-if="firmware" class="mono">{{ firmware.hardwareModel }} · {{ formatBytes(firmware.size) }} · SHA-256 {{ firmware.sha256.slice(0, 16) }}...</small>
+          <small v-else>上传后自动读取固件内置版本与硬件型号</small>
+        </div>
+        <form class="tools-firmware-upload" @submit.prevent="uploadFirmware">
+          <input class="field" type="file" accept=".bin,application/octet-stream" required @change="selectFirmware">
+          <button class="btn" :disabled="firmwareBusy || !firmwareFile">{{ firmwareBusy ? '识别并上传中' : '上传固件' }}</button>
+        </form>
+        <div class="tools-firmware-deploy">
+          <label class="checkbox-row"><input v-model="allowFirmwareReinstall" type="checkbox"> 允许同版本重装或降级</label>
+          <button class="btn primary" :disabled="firmwareBusy || offline || !firmware || (firmwareSameVersion && !allowFirmwareReinstall)" @click="deployFirmware">升级当前终端</button>
+        </div>
+      </div>
+      <div v-if="firmwareResult" class="setup-note">{{ firmwareResult }}</div>
+    </section>
 
     <section class="card tools-danger-panel top-gap">
       <div class="card-head"><div><b>模组控制</b><small>可能中断当前网络或正在执行的任务</small></div><span class="status danger">高风险</span></div>

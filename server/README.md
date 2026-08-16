@@ -160,6 +160,15 @@ Set `SMS_HUB_EMBEDDED_MQTT=false` and `SMS_HUB_MQTT_BROKER=tcp://host:1883` only
 - `sms-hub/devices/{deviceId}/status`
 - `sms-hub/devices/{deviceId}/commands` for server-to-terminal command delivery
 
-Terminal HTTP endpoints have been removed. Terminals must connect through MQTT; the HTTP API is only for the SMS Hub web/admin surface.
+## WiFi OTA 固件升级
+
+固件使用 `code/partitions.csv` 自定义双 OTA 分区。首次迁移现有终端时仍需通过 USB 烧录一次分区表和应用；NVS 起始地址和大小保持不变，因此 WiFi 与 SMS Hub 配置会保留。之后可在管理台“诊断工具 -> 终端固件”上传 `.bin` 并对在线终端执行升级。中心会从固件内置 metadata 自动识别版本和硬件型号，无需在页面手工输入；发布新版本时只需修改 `code/firmware_version.h` 中的 `SMSHUB_FIRMWARE_VERSION`。
+
+```powershell
+arduino-cli compile --fqbn esp32:esp32:makergo_c3_supermini --build-path .pi/build/firmware code
+arduino-cli upload --fqbn esp32:esp32:makergo_c3_supermini --port COM4 --input-dir .pi/build/firmware code
+```
+
+中心服务将固件保存在 `/data/firmware`，下载使用 30 分钟有效且绑定终端 ID 的随机令牌。部署时必须正确设置 `SMS_HUB_PUBLIC_BASE_URL`，确保终端能访问生成的固件 URL，例如 `http://172.16.0.9:8082`。
 
 Next phases should add terminal/admin authentication, migrate from snapshot persistence to normalized relational tables if query/reporting needs grow, implement async delivery and eSIM maintenance workers, and expand ESP32 terminal command execution coverage.

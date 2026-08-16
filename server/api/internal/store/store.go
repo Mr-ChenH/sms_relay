@@ -1367,7 +1367,21 @@ func (s *Store) Commands() []model.DeviceCommand {
 	if s.commands == nil {
 		return []model.DeviceCommand{}
 	}
-	return append([]model.DeviceCommand{}, s.commands...)
+	rows := append([]model.DeviceCommand{}, s.commands...)
+	for i := range rows {
+		if rows[i].Type != "firmware_update" || rows[i].Payload == nil {
+			continue
+		}
+		payload := make(map[string]interface{}, len(rows[i].Payload))
+		for key, value := range rows[i].Payload {
+			payload[key] = value
+		}
+		if _, ok := payload["url"]; ok {
+			payload["url"] = "[signed firmware URL]"
+		}
+		rows[i].Payload = payload
+	}
+	return rows
 }
 
 func (s *Store) CreateDeviceCommand(req model.CreateDeviceCommandRequest) (model.DeviceCommand, error) {
@@ -1955,6 +1969,10 @@ func maskActivationCode(code string) string {
 func summarizePayload(payload map[string]interface{}) string {
 	parts := make([]string, 0, len(payload))
 	for key, value := range payload {
+		if key == "url" && strings.Contains(fmt.Sprint(value), "token=") {
+			parts = append(parts, "url=[signed firmware URL]")
+			continue
+		}
 		parts = append(parts, fmt.Sprintf("%s=%v", key, value))
 	}
 	return strings.Join(parts, ", ")

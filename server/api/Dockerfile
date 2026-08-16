@@ -44,6 +44,7 @@ WORKDIR /app
 ENV SMS_HUB_API_ADDR=:8080 \
     SMS_HUB_MQTT_ADDR=:1883 \
     SMS_HUB_DB_PATH=/data/smshub.db \
+    SMS_HUB_FIRMWARE_DIR=/data/firmware \
     SMS_HUB_WEB_DIR=/app/web \
     LPAC_PATH=/usr/local/bin/lpac
 VOLUME ["/data"]

@@ -262,6 +262,15 @@ export interface CommandResult {
   message: string
 }
 
+export interface FirmwareImage {
+  hardwareModel: string
+  version: string
+  filename: string
+  size: number
+  sha256: string
+  uploadedAt: string
+}
+
 export interface DeviceCommand {
   id: string
   deviceId: string

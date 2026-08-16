@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"sms-forwarding/server/api/internal/firmware"
 	"sms-forwarding/server/api/internal/lpa"
 	"sms-forwarding/server/api/internal/model"
 	"sms-forwarding/server/api/internal/notify"
@@ -24,10 +25,16 @@ type Server struct {
 	publicBaseURL    string
 	publicMQTTBroker string
 	lpaRunner        *lpa.Runner
+	firmware         *firmware.Repository
 }
 
 func New(s *store.Store, notifier *notify.Client, runners ...*lpa.Runner) *Server {
-	server := &Server{store: s, notifier: notifier, publicBaseURL: strings.TrimSpace(os.Getenv("SMS_HUB_PUBLIC_BASE_URL")), publicMQTTBroker: strings.TrimSpace(os.Getenv("SMS_HUB_PUBLIC_MQTT_BROKER"))}
+	firmwareDir := strings.TrimSpace(os.Getenv("SMS_HUB_FIRMWARE_DIR"))
+	if firmwareDir == "" {
+		firmwareDir = "/data/firmware"
+	}
+	firmwareRepo, _ := firmware.NewRepository(firmwareDir)
+	server := &Server{store: s, notifier: notifier, publicBaseURL: strings.TrimRight(strings.TrimSpace(os.Getenv("SMS_HUB_PUBLIC_BASE_URL")), "/"), publicMQTTBroker: strings.TrimSpace(os.Getenv("SMS_HUB_PUBLIC_MQTT_BROKER")), firmware: firmwareRepo}
 	if len(runners) > 0 {
 		server.lpaRunner = runners[0]
 	}
@@ -49,6 +56,10 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/admin/outbound-sms", s.sendSMS)
 	mux.HandleFunc("GET /api/admin/commands", s.commands)
 	mux.HandleFunc("POST /api/admin/commands", s.createCommand)
+	mux.HandleFunc("GET /api/admin/firmware", s.currentFirmware)
+	mux.HandleFunc("POST /api/admin/firmware", s.uploadFirmware)
+	mux.HandleFunc("POST /api/admin/firmware/deploy", s.deployFirmware)
+	mux.HandleFunc("GET /api/firmware/download", s.downloadFirmware)
 	mux.HandleFunc("GET /api/admin/apprise-service", s.appriseService)
 	mux.HandleFunc("GET /api/admin/apprise-services", s.appriseServices)
 	mux.HandleFunc("POST /api/admin/apprise-services", s.createAppriseService)
@@ -160,12 +171,131 @@ func (s *Server) createCommand(w http.ResponseWriter, r *http.Request) {
 	if !decodeJSON(w, r, &req) {
 		return
 	}
+	if strings.TrimSpace(req.Type) == "firmware_update" {
+		writeJSON(w, http.StatusBadRequest, model.APIResponse{Success: false, Error: "firmware_update commands must use the firmware deployment endpoint"})
+		return
+	}
 	cmd, err := s.store.CreateDeviceCommand(req)
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, model.APIResponse{Success: false, Error: err.Error()})
 		return
 	}
 	writeJSON(w, http.StatusCreated, model.APIResponse{Success: true, Data: cmd})
+}
+
+func (s *Server) currentFirmware(w http.ResponseWriter, _ *http.Request) {
+	if s.firmware == nil {
+		writeJSON(w, http.StatusServiceUnavailable, model.APIResponse{Success: false, Error: "firmware repository is unavailable"})
+		return
+	}
+	image, ok := s.firmware.Current()
+	if !ok {
+		writeJSON(w, http.StatusOK, model.APIResponse{Success: true, Data: nil})
+		return
+	}
+	writeJSON(w, http.StatusOK, model.APIResponse{Success: true, Data: image})
+}
+
+func (s *Server) uploadFirmware(w http.ResponseWriter, r *http.Request) {
+	if s.firmware == nil {
+		writeJSON(w, http.StatusServiceUnavailable, model.APIResponse{Success: false, Error: "firmware repository is unavailable"})
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, firmware.MaxImageSize+1024*1024)
+	if err := r.ParseMultipartForm(firmware.MaxImageSize + 1024*1024); err != nil {
+		writeJSON(w, http.StatusBadRequest, model.APIResponse{Success: false, Error: "invalid or oversized firmware upload"})
+		return
+	}
+	file, header, err := r.FormFile("firmware")
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, model.APIResponse{Success: false, Error: "firmware file is required"})
+		return
+	}
+	defer file.Close()
+	if !strings.HasSuffix(strings.ToLower(header.Filename), ".bin") {
+		writeJSON(w, http.StatusBadRequest, model.APIResponse{Success: false, Error: "firmware file must use the .bin extension"})
+		return
+	}
+	image, err := s.firmware.Save(file)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, model.APIResponse{Success: false, Error: err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusCreated, model.APIResponse{Success: true, Data: image})
+}
+
+func (s *Server) deployFirmware(w http.ResponseWriter, r *http.Request) {
+	if s.firmware == nil {
+		writeJSON(w, http.StatusServiceUnavailable, model.APIResponse{Success: false, Error: "firmware repository is unavailable"})
+		return
+	}
+	var req struct {
+		DeviceID       string `json:"deviceId"`
+		AllowDowngrade bool   `json:"allowDowngrade"`
+	}
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	image, ok := s.firmware.Current()
+	if !ok {
+		writeJSON(w, http.StatusBadRequest, model.APIResponse{Success: false, Error: "no firmware image has been uploaded"})
+		return
+	}
+	device, ok := s.store.FindDevice(req.DeviceID)
+	if !ok {
+		writeJSON(w, http.StatusNotFound, model.APIResponse{Success: false, Error: "device not found"})
+		return
+	}
+	if device.Status != "online" {
+		writeJSON(w, http.StatusBadRequest, model.APIResponse{Success: false, Error: "terminal is offline"})
+		return
+	}
+	if image.HardwareModel != "" && image.HardwareModel != device.HardwareModel {
+		writeJSON(w, http.StatusBadRequest, model.APIResponse{Success: false, Error: "firmware hardware model does not match the terminal"})
+		return
+	}
+	if !req.AllowDowngrade && image.Version == device.FirmwareVersion {
+		writeJSON(w, http.StatusBadRequest, model.APIResponse{Success: false, Error: "terminal already reports this firmware version; explicitly allow reinstall to continue"})
+		return
+	}
+	token, expires, err := s.firmware.IssueToken(device.DeviceID, 30*time.Minute)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, model.APIResponse{Success: false, Error: err.Error()})
+		return
+	}
+	baseURL := s.publicBaseURL
+	if baseURL == "" {
+		baseURL = inferredBaseURL(r)
+	}
+	downloadURL := strings.TrimRight(baseURL, "/") + "/api/firmware/download?deviceId=" + device.DeviceID + "&token=" + token
+	cmd, err := s.store.CreateDeviceCommand(model.CreateDeviceCommandRequest{DeviceID: device.ID, Type: "firmware_update", Payload: map[string]interface{}{
+		"url": downloadURL, "version": image.Version, "size": image.Size, "sha256": image.SHA256,
+		"hardwareModel": device.HardwareModel, "expiresAt": expires.UTC().Format(time.RFC3339), "allowDowngrade": req.AllowDowngrade,
+	}})
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, model.APIResponse{Success: false, Error: err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusCreated, model.APIResponse{Success: true, Data: cmd})
+}
+
+func (s *Server) downloadFirmware(w http.ResponseWriter, r *http.Request) {
+	if s.firmware == nil || !s.firmware.Authorize(r.URL.Query().Get("token"), r.URL.Query().Get("deviceId")) {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	image, file, err := s.firmware.OpenCurrent()
+	if err != nil {
+		http.Error(w, "firmware not found", http.StatusNotFound)
+		return
+	}
+	defer file.Close()
+	w.Header().Set("Content-Type", "application/octet-stream")
+	w.Header().Set("Content-Length", strconv.FormatInt(image.Size, 10))
+	w.Header().Set("X-Firmware-Version", image.Version)
+	w.Header().Set("X-Firmware-SHA256", image.SHA256)
+	w.Header().Set("Cache-Control", "no-store")
+	http.ServeContent(w, r, image.Filename, image.UploadedAt, file)
 }
 
 func (s *Server) appriseService(w http.ResponseWriter, r *http.Request) {

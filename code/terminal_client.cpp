@@ -1,6 +1,8 @@
 #include "terminal_client.h"
 #include "wifi_config.h"
 #include "config.h"
+#include "firmware_ota.h"
+#include "firmware_version.h"
 #include "logger.h"
 #include "modem.h"
 #include "esim.h"
@@ -31,7 +33,7 @@ static const unsigned long IDENTITY_SETTLE_INTERVAL_MS = 10000;
 static const unsigned long IDENTITY_SETTLE_WINDOW_MS = 120000;
 static const size_t MAX_LOG_QUEUE = 8;
 
-static const char* FIRMWARE_VERSION = "0.9.0-terminal";
+static const char* FIRMWARE_VERSION = SMSHUB_FIRMWARE_METADATA.version;
 
 static unsigned long smsSequence = 0;
 
@@ -242,7 +244,7 @@ static void terminalRegister() {
   doc["deviceId"] = terminalDeviceID();
   doc["name"] = terminalDeviceID();
   doc["firmwareVersion"] = FIRMWARE_VERSION;
-  doc["hardwareModel"] = "ESP32-C3 + ML307A";
+  doc["hardwareModel"] = SMSHUB_FIRMWARE_METADATA.hardware;
   doc["ip"] = WiFi.localIP().toString();
   if (publishJSON("/register", doc, false)) {
     registered = true;
@@ -255,7 +257,7 @@ static void terminalHeartbeat(bool refreshIdentity = true) {
   JsonDocument doc;
   doc["deviceId"] = terminalDeviceID();
   doc["firmwareVersion"] = FIRMWARE_VERSION;
-  doc["hardwareModel"] = "ESP32-C3 + ML307A";
+  doc["hardwareModel"] = SMSHUB_FIRMWARE_METADATA.hardware;
   doc["operator"] = cachedOperator;
   doc["iccid"] = cachedICCID;
   doc["eid"] = cachedEID;
@@ -445,6 +447,9 @@ void terminalSyncEsimProfiles() {
   lastEsimProfileSyncAt = millis();
 }
 
+static bool otaRebootPending = false;
+static unsigned long otaRebootAt = 0;
+
 static String commandString(JsonVariantConst payload, const char* key) {
   if (!payload.is<JsonObjectConst>()) return "";
   const char* value = payload[key] | "";
@@ -479,6 +484,30 @@ static bool atResponseSucceeded(const String& response) {
 }
 
 static bool executeCommand(const String& type, JsonVariantConst payload, String& result) {
+  if (type == "firmware_update") {
+    String url = commandString(payload, "url");
+    String version = commandString(payload, "version");
+    String sha256 = commandString(payload, "sha256");
+    String hardwareModel = commandString(payload, "hardwareModel");
+    size_t size = payload["size"] | 0;
+    bool allowDowngrade = payload["allowDowngrade"] | false;
+    if (url.length() == 0 || version.length() == 0 || size == 0) {
+      result = "missing OTA URL, version or size";
+      return false;
+    }
+    if (!allowDowngrade && version == FIRMWARE_VERSION) {
+      result = "firmware version is already installed";
+      return false;
+    }
+    terminalReportLog("info", String("firmware OTA started: ") + version + ", bytes=" + size);
+    bool ok = firmwareOTAExecute(url, version, size, sha256, hardwareModel, result);
+    terminalReportLog(ok ? "info" : "error", String("firmware OTA ") + (ok ? "verified: " : "failed: ") + result);
+    if (ok) {
+      otaRebootPending = true;
+      otaRebootAt = millis() + 3000;
+    }
+    return ok;
+  }
   if (type == "send_sms") {
     String phone = commandString(payload, "phone");
     String body = commandString(payload, "body");
@@ -813,6 +842,7 @@ static bool ensureMqttConnected() {
   publishText("/status", "online", true);
   terminalRegister();
   terminalHeartbeat();
+  firmwareOTAMarkValid();
   return true;
 }
 
@@ -853,6 +883,10 @@ void terminalClientService() {
   if (mqttReady) mqttClient.loop();
   if (mqttReady) flushSMSQueue();
   if (mqttReady) flushCommandResult();
+  if (otaRebootPending && (long)(millis() - otaRebootAt) >= 0 && pendingResultCommandId.length() == 0) {
+    delay(100);
+    ESP.restart();
+  }
   smsQueueService();
   unsigned long now = millis();
   if (mqttReady && now - lastHeartbeatAt > HEARTBEAT_INTERVAL_MS) terminalHeartbeat(false);

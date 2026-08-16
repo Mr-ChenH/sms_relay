@@ -4,6 +4,8 @@ services:
     restart: unless-stopped
     environment:
       TZ: "${TZ:-Asia/Shanghai}"
+      SMS_HUB_PUBLIC_BASE_URL: "${SMS_HUB_PUBLIC_BASE_URL:-}"
+      SMS_HUB_FIRMWARE_DIR: /data/firmware
     ports:
       - "8080:8080"
       - "1883:1883"
