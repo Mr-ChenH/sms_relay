@@ -449,6 +449,18 @@ function profileOptionLabel(profile: EsimProfile) {
   return `${state}${name}${provider}${phone} · ICCID ${profile.iccid}`
 }
 
+function formatEsimMemory(bytes: number) {
+  if (!bytes || bytes < 0) return '未知'
+  if (bytes >= 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(2)} MB`
+  if (bytes >= 1024) return `${(bytes / 1024).toFixed(1)} KB`
+  return `${bytes} B`
+}
+
+function esimCategoryLabel(value: string) {
+  const labels: Record<string, string> = { basic: '基础 eUICC', medium: '中型 eUICC', contactless: '非接触式 eUICC', other: '其他' }
+  return labels[value] || value || '未知'
+}
+
 function signalLabel(rssi: number) {
   if (!rssi || rssi > 0) return '未知'
   if (rssi >= -60) return '优秀'
@@ -1043,6 +1055,24 @@ onBeforeUnmount(() => {
               <div class="esim-device-stat esim-device-secondary"><span>EID</span><b class="mono">{{ selectedEsimDevice.eid || '-' }}</b></div>
             </template>
           </div>
+
+          <section v-if="selectedEsimDevice" class="card esim-chip-panel top-gap">
+            <div class="card-head"><div><b>eSIM 芯片与容量</b><small>由 eUICC 标准 EUICCInfo2 返回</small></div><span class="status info">{{ esimCategoryLabel(selectedEsimDevice.esimCategory) }}</span></div>
+            <div class="esim-chip-grid">
+              <div class="esim-chip-memory"><span>剩余非易失存储</span><b>{{ formatEsimMemory(selectedEsimDevice.esimFreeNvMemory) }}</b><small>Profile 与应用持久存储空间</small></div>
+              <div class="esim-chip-memory"><span>总非易失存储</span><b>芯片未提供</b><small>SGP.22 EUICCInfo2 不包含总容量字段</small></div>
+              <div class="esim-chip-memory"><span>剩余易失内存</span><b>{{ formatEsimMemory(selectedEsimDevice.esimFreeVolatileMemory) }}</b><small>eUICC 运行时可用内存</small></div>
+              <div class="esim-chip-memory"><span>已安装应用</span><b>{{ selectedEsimDevice.esimInstalledApplications || '未知' }}</b><small>芯片报告的应用数量</small></div>
+            </div>
+            <dl class="esim-chip-details">
+              <div><dt>EID</dt><dd class="mono">{{ selectedEsimDevice.eid || '-' }}</dd></div>
+              <div><dt>eUICC 固件</dt><dd>{{ selectedEsimDevice.esimFirmwareVersion || '-' }}</dd></div>
+              <div><dt>SGP.22 SVN</dt><dd>{{ selectedEsimDevice.esimSvn || '-' }}</dd></div>
+              <div><dt>Profile 包版本</dt><dd>{{ selectedEsimDevice.esimProfileVersion || '-' }}</dd></div>
+              <div><dt>GlobalPlatform</dt><dd>{{ selectedEsimDevice.esimGlobalPlatformVersion || '-' }}</dd></div>
+              <div><dt>SAS 认证号</dt><dd class="mono">{{ selectedEsimDevice.esimSasAccreditationNumber || '-' }}</dd></div>
+            </dl>
+          </section>
 
           <div v-if="!esimCapabilities.profileDownload" class="alert danger top-gap">eSIM Profile 下载仅支持 Linux 服务端或 Docker 部署。当前平台：{{ esimCapabilities.platform || '未知' }}。{{ esimCapabilities.platform === 'windows' ? 'Windows 服务端不支持下载新 Profile。' : esimCapabilities.reason }}</div>
           <div v-if="selectedEsimDevice?.status !== 'online'" class="alert danger top-gap">终端当前离线，Profile 下载、切换和删除操作暂不可用。</div>

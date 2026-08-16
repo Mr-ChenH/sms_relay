@@ -9,23 +9,32 @@ type APIResponse struct {
 }
 
 type Device struct {
-	ID              string    `json:"id"`
-	DeviceID        string    `json:"deviceId"`
-	Name            string    `json:"name"`
-	Status          string    `json:"status"`
-	FirmwareVersion string    `json:"firmwareVersion"`
-	HardwareModel   string    `json:"hardwareModel"`
-	ICCID           string    `json:"iccid"`
-	EID             string    `json:"eid"`
-	Operator        string    `json:"operator"`
-	PhoneNumber     string    `json:"phoneNumber"`
-	IP              string    `json:"ip"`
-	RSSI            int       `json:"rssi"`
-	CellularRSSI    int       `json:"cellularRssi"`
-	CellularCSQ     int       `json:"cellularCsq"`
-	FreeHeapKB      int       `json:"freeHeapKb"`
-	Uptime          string    `json:"uptime"`
-	LastSeenAt      time.Time `json:"lastSeenAt"`
+	ID                         string    `json:"id"`
+	DeviceID                   string    `json:"deviceId"`
+	Name                       string    `json:"name"`
+	Status                     string    `json:"status"`
+	FirmwareVersion            string    `json:"firmwareVersion"`
+	HardwareModel              string    `json:"hardwareModel"`
+	ICCID                      string    `json:"iccid"`
+	EID                        string    `json:"eid"`
+	EsimProfileVersion         string    `json:"esimProfileVersion"`
+	EsimSVN                    string    `json:"esimSvn"`
+	EsimFirmwareVersion        string    `json:"esimFirmwareVersion"`
+	EsimGlobalPlatformVersion  string    `json:"esimGlobalPlatformVersion"`
+	EsimCategory               string    `json:"esimCategory"`
+	EsimSASAccreditationNumber string    `json:"esimSasAccreditationNumber"`
+	EsimInstalledApplications  uint32    `json:"esimInstalledApplications"`
+	EsimFreeNVMemory           uint32    `json:"esimFreeNvMemory"`
+	EsimFreeVolatileMemory     uint32    `json:"esimFreeVolatileMemory"`
+	Operator                   string    `json:"operator"`
+	PhoneNumber                string    `json:"phoneNumber"`
+	IP                         string    `json:"ip"`
+	RSSI                       int       `json:"rssi"`
+	CellularRSSI               int       `json:"cellularRssi"`
+	CellularCSQ                int       `json:"cellularCsq"`
+	FreeHeapKB                 int       `json:"freeHeapKb"`
+	Uptime                     string    `json:"uptime"`
+	LastSeenAt                 time.Time `json:"lastSeenAt"`
 }
 
 type UpdateDeviceRequest struct {
@@ -329,19 +338,28 @@ type TerminalRegisterRequest struct {
 }
 
 type TerminalHeartbeatRequest struct {
-	DeviceID        string `json:"deviceId"`
-	FirmwareVersion string `json:"firmwareVersion"`
-	HardwareModel   string `json:"hardwareModel"`
-	ICCID           string `json:"iccid"`
-	EID             string `json:"eid"`
-	Operator        string `json:"operator"`
-	PhoneNumber     string `json:"phoneNumber"`
-	IP              string `json:"ip"`
-	RSSI            int    `json:"rssi"`
-	CellularRSSI    int    `json:"cellularRssi"`
-	CellularCSQ     int    `json:"cellularCsq"`
-	FreeHeapKB      int    `json:"freeHeapKb"`
-	Uptime          string `json:"uptime"`
+	DeviceID                   string `json:"deviceId"`
+	FirmwareVersion            string `json:"firmwareVersion"`
+	HardwareModel              string `json:"hardwareModel"`
+	ICCID                      string `json:"iccid"`
+	EID                        string `json:"eid"`
+	EsimProfileVersion         string `json:"esimProfileVersion"`
+	EsimSVN                    string `json:"esimSvn"`
+	EsimFirmwareVersion        string `json:"esimFirmwareVersion"`
+	EsimGlobalPlatformVersion  string `json:"esimGlobalPlatformVersion"`
+	EsimCategory               string `json:"esimCategory"`
+	EsimSASAccreditationNumber string `json:"esimSasAccreditationNumber"`
+	EsimInstalledApplications  uint32 `json:"esimInstalledApplications"`
+	EsimFreeNVMemory           uint32 `json:"esimFreeNvMemory"`
+	EsimFreeVolatileMemory     uint32 `json:"esimFreeVolatileMemory"`
+	Operator                   string `json:"operator"`
+	PhoneNumber                string `json:"phoneNumber"`
+	IP                         string `json:"ip"`
+	RSSI                       int    `json:"rssi"`
+	CellularRSSI               int    `json:"cellularRssi"`
+	CellularCSQ                int    `json:"cellularCsq"`
+	FreeHeapKB                 int    `json:"freeHeapKb"`
+	Uptime                     string `json:"uptime"`
 }
 
 type TerminalSMSRequest struct {

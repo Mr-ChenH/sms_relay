@@ -21,12 +21,25 @@ struct ESimProfile {
   int profileClass;
 };
 
+struct ESimInfo {
+  char profileVersion[16];
+  char svn[16];
+  char firmwareVersion[16];
+  char globalPlatformVersion[16];
+  char category[24];
+  char sasAccreditationNumber[64];
+  uint32_t installedApplications;
+  uint32_t freeNonVolatileMemory;
+  uint32_t freeVolatileMemory;
+};
+
 // eUICC 是否初始化成功（esimInit）。未就绪时 esimGetProfiles/esimGetEID
 // 立即失败返回，避免身份刷新等路径被慢速 APDU 查询阻塞。
 extern bool esimReady;
 
 bool esimInit();
 bool esimGetEID(char* eid, size_t bufferSize);
+bool esimGetInfo(ESimInfo* info);
 int esimGetProfiles(ESimProfile* profiles, int maxProfiles);
 bool esimEnableProfile(const char* iccidOrAid);
 bool esimDisableProfile(const char* iccidOrAid);

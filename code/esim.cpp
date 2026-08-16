@@ -43,6 +43,62 @@ bool esimInit() {
   return true;
 }
 
+static void copyVersion(char* out, size_t outSize, const EsimTlvNode& node) {
+  if (!out || outSize == 0) return;
+  if (node.length == 3) snprintf(out, outSize, "%u.%u.%u", node.value[0], node.value[1], node.value[2]);
+}
+
+bool esimGetInfo(ESimInfo* info) {
+  if (!esimReady) {
+    esimSetError("eUICC 未就绪");
+    return false;
+  }
+  if (!info) return false;
+  memset(info, 0, sizeof(*info));
+  uint8_t request[] = {0xBF, 0x22, 0x00};
+  uint8_t* response = nullptr;
+  size_t responseLength = 0;
+  if (!esimES10Command(request, sizeof(request), &response, &responseLength)) return false;
+
+  EsimTlvNode top;
+  bool ok = esimReadTlv(response, responseLength, 0, &top) && top.tag == 0xBF22;
+  if (ok) {
+    size_t offset = 0;
+    EsimTlvNode node;
+    while (esimReadTlv(top.value, top.length, offset, &node)) {
+      offset = node.nextOffset;
+      switch (node.tag) {
+        case 0x81: copyVersion(info->profileVersion, sizeof(info->profileVersion), node); break;
+        case 0x82: copyVersion(info->svn, sizeof(info->svn), node); break;
+        case 0x83: copyVersion(info->firmwareVersion, sizeof(info->firmwareVersion), node); break;
+        case 0x84: {
+          size_t resourceOffset = 0;
+          EsimTlvNode resource;
+          while (esimReadTlv(node.value, node.length, resourceOffset, &resource)) {
+            resourceOffset = resource.nextOffset;
+            if (resource.tag == 0x81) info->installedApplications = esimParseInteger(resource.value, resource.length);
+            else if (resource.tag == 0x82) info->freeNonVolatileMemory = esimParseInteger(resource.value, resource.length);
+            else if (resource.tag == 0x83) info->freeVolatileMemory = esimParseInteger(resource.value, resource.length);
+          }
+          break;
+        }
+        case 0x87: copyVersion(info->globalPlatformVersion, sizeof(info->globalPlatformVersion), node); break;
+        case 0xAB: {
+          uint32_t category = esimParseInteger(node.value, node.length);
+          const char* label = category == 1 ? "basic" : category == 2 ? "medium" : category == 3 ? "contactless" : "other";
+          strncpy(info->category, label, sizeof(info->category) - 1);
+          break;
+        }
+        case 0x0C: esimCopyBytesAsString(info->sasAccreditationNumber, sizeof(info->sasAccreditationNumber), node.value, node.length); break;
+      }
+    }
+  } else {
+    esimSetError("无法解析 EUICCInfo2 响应");
+  }
+  free(response);
+  return ok;
+}
+
 bool esimGetEID(char* eid, size_t bufferSize) {
   if (!esimReady) {
     esimSetError("eUICC 未就绪");

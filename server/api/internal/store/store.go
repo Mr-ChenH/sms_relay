@@ -1522,6 +1522,21 @@ func (s *Store) Heartbeat(req model.TerminalHeartbeatRequest) (model.Device, err
 		device.PhoneNumber = firstNonEmpty(strings.TrimSpace(req.PhoneNumber), device.PhoneNumber)
 	}
 	device.EID = firstNonEmpty(req.EID, device.EID)
+	device.EsimProfileVersion = firstNonEmpty(req.EsimProfileVersion, device.EsimProfileVersion)
+	device.EsimSVN = firstNonEmpty(req.EsimSVN, device.EsimSVN)
+	device.EsimFirmwareVersion = firstNonEmpty(req.EsimFirmwareVersion, device.EsimFirmwareVersion)
+	device.EsimGlobalPlatformVersion = firstNonEmpty(req.EsimGlobalPlatformVersion, device.EsimGlobalPlatformVersion)
+	device.EsimCategory = firstNonEmpty(req.EsimCategory, device.EsimCategory)
+	device.EsimSASAccreditationNumber = firstNonEmpty(req.EsimSASAccreditationNumber, device.EsimSASAccreditationNumber)
+	if req.EsimInstalledApplications > 0 {
+		device.EsimInstalledApplications = req.EsimInstalledApplications
+	}
+	if req.EsimFreeNVMemory > 0 {
+		device.EsimFreeNVMemory = req.EsimFreeNVMemory
+	}
+	if req.EsimFreeVolatileMemory > 0 {
+		device.EsimFreeVolatileMemory = req.EsimFreeVolatileMemory
+	}
 	device.IP = firstNonEmpty(strings.TrimSpace(req.IP), device.IP)
 	device.RSSI = req.RSSI
 	device.CellularRSSI = req.CellularRSSI

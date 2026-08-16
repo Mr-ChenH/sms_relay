@@ -20,6 +20,15 @@ export interface Device {
   hardwareModel: string
   iccid: string
   eid: string
+  esimProfileVersion: string
+  esimSvn: string
+  esimFirmwareVersion: string
+  esimGlobalPlatformVersion: string
+  esimCategory: string
+  esimSasAccreditationNumber: string
+  esimInstalledApplications: number
+  esimFreeNvMemory: number
+  esimFreeVolatileMemory: number
   operator: string
   phoneNumber: string
   ip: string

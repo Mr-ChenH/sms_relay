@@ -23,7 +23,7 @@ bool handleESimSerialCommand(const String& command) {
   String args = line.substring(4);
   args.trim();
   if (args.length() == 0 || args == "help") {
-    Serial.println("eSIM 命令: list, eid, switch/enable/disable <iccid|aid>");
+    Serial.println("eSIM 命令: list, eid, info, switch/enable/disable <iccid|aid>");
     return true;
   }
   if (args == "list") {
@@ -37,6 +37,24 @@ bool handleESimSerialCommand(const String& command) {
     char eid[40];
     if (esimGetEID(eid, sizeof(eid))) Serial.println(eid);
     else Serial.println(esimGetLastError());
+    return true;
+  }
+  if (args == "info") {
+    ESimInfo info;
+    if (!esimGetInfo(&info)) {
+      Serial.println(esimGetLastError());
+      return true;
+    }
+    Serial.println(String("Profile package: ") + (info.profileVersion[0] ? info.profileVersion : "-"));
+    Serial.println(String("SGP.22 SVN: ") + (info.svn[0] ? info.svn : "-"));
+    Serial.println(String("Firmware: ") + (info.firmwareVersion[0] ? info.firmwareVersion : "-"));
+    Serial.println(String("GlobalPlatform: ") + (info.globalPlatformVersion[0] ? info.globalPlatformVersion : "-"));
+    Serial.println(String("Category: ") + (info.category[0] ? info.category : "-"));
+    Serial.println(String("SAS: ") + (info.sasAccreditationNumber[0] ? info.sasAccreditationNumber : "-"));
+    Serial.println(String("Installed applications: ") + info.installedApplications);
+    Serial.println(String("Free NVM: ") + info.freeNonVolatileMemory + " bytes");
+    Serial.println(String("Free volatile memory: ") + info.freeVolatileMemory + " bytes");
+    Serial.println("Total NVM: not reported by EUICCInfo2");
     return true;
   }
   int space = args.indexOf(' ');

@@ -60,10 +60,19 @@ func TestHeartbeatReplacesProfileIdentityFields(t *testing.T) {
 	}}}
 
 	device, err := s.Heartbeat(model.TerminalHeartbeatRequest{
-		DeviceID:     "esp32-test",
-		ICCID:        "new-iccid",
-		CellularRSSI: -85,
-		CellularCSQ:  14,
+		DeviceID:                   "esp32-test",
+		ICCID:                      "new-iccid",
+		CellularRSSI:               -85,
+		CellularCSQ:                14,
+		EsimFirmwareVersion:        "1.2.3",
+		EsimSVN:                    "2.2.0",
+		EsimProfileVersion:         "2.3.1",
+		EsimGlobalPlatformVersion:  "2.3.0",
+		EsimCategory:               "medium",
+		EsimSASAccreditationNumber: "SAS-TEST",
+		EsimInstalledApplications:  6,
+		EsimFreeNVMemory:           524288,
+		EsimFreeVolatileMemory:     32768,
 	})
 	if err != nil {
 		t.Fatalf("Heartbeat() error = %v", err)
@@ -73,6 +82,11 @@ func TestHeartbeatReplacesProfileIdentityFields(t *testing.T) {
 	}
 	if device.CellularRSSI != -85 || device.CellularCSQ != 14 {
 		t.Fatalf("cellular signal = %d dBm / CSQ %d, want -85 / 14", device.CellularRSSI, device.CellularCSQ)
+	}
+	if device.EsimFirmwareVersion != "1.2.3" || device.EsimSVN != "2.2.0" || device.EsimProfileVersion != "2.3.1" ||
+		device.EsimGlobalPlatformVersion != "2.3.0" || device.EsimCategory != "medium" || device.EsimSASAccreditationNumber != "SAS-TEST" ||
+		device.EsimInstalledApplications != 6 || device.EsimFreeNVMemory != 524288 || device.EsimFreeVolatileMemory != 32768 {
+		t.Fatalf("eSIM info was not stored: %+v", device)
 	}
 	if device.Operator != "" {
 		t.Fatalf("Operator = %q, want empty while new profile registers", device.Operator)

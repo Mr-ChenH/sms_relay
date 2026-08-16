@@ -59,6 +59,7 @@ static String terminalDeviceID();
 
 static String cachedICCID;
 static String cachedEID;
+static ESimInfo cachedEsimInfo = {};
 static String cachedOperator;
 static String cachedPhoneNumber;
 static int cachedCellularCSQ = 99;
@@ -258,6 +259,15 @@ static void terminalHeartbeat(bool refreshIdentity = true) {
   doc["operator"] = cachedOperator;
   doc["iccid"] = cachedICCID;
   doc["eid"] = cachedEID;
+  doc["esimProfileVersion"] = cachedEsimInfo.profileVersion;
+  doc["esimSvn"] = cachedEsimInfo.svn;
+  doc["esimFirmwareVersion"] = cachedEsimInfo.firmwareVersion;
+  doc["esimGlobalPlatformVersion"] = cachedEsimInfo.globalPlatformVersion;
+  doc["esimCategory"] = cachedEsimInfo.category;
+  doc["esimSasAccreditationNumber"] = cachedEsimInfo.sasAccreditationNumber;
+  doc["esimInstalledApplications"] = cachedEsimInfo.installedApplications;
+  doc["esimFreeNvMemory"] = cachedEsimInfo.freeNonVolatileMemory;
+  doc["esimFreeVolatileMemory"] = cachedEsimInfo.freeVolatileMemory;
   doc["phoneNumber"] = cachedPhoneNumber;
   doc["ip"] = WiFi.localIP().toString();
   doc["rssi"] = WiFi.RSSI();
@@ -407,6 +417,8 @@ void terminalSyncEsimProfiles() {
   if (esimReady) {
     char eid[40];
     if (esimGetEID(eid, sizeof(eid))) cachedEID = eid;
+    ESimInfo info;
+    if (esimGetInfo(&info)) cachedEsimInfo = info;
   }
 
   JsonDocument doc;
@@ -429,6 +441,7 @@ void terminalSyncEsimProfiles() {
     esimProfileSyncPending = true;
   }
   delete[] profiles;
+  terminalHeartbeat(false);
   lastEsimProfileSyncAt = millis();
 }
 
