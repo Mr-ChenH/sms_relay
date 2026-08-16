@@ -5,6 +5,7 @@
 #include "config.h"
 #include "terminal_client.h"
 #include "web_config.h"
+#include <esp_mac.h>
 
 #ifndef WIFI_PROV_SERVICE_PREFIX
 #define WIFI_PROV_SERVICE_PREFIX "SMSHub"
@@ -21,7 +22,7 @@ static const unsigned long WIFI_PROVISION_WAIT_MS = 30000;  // 首次配网等�
 static bool apStarted = false;
 static bool pendingCredentials = false;
 static bool pendingTerminalConfig = false;
-static volatile bool wifiConnectionLost = false;
+static bool wifiWasConnected = false;
 static String pendingSSID;
 static String pendingPassword;
 
@@ -36,11 +37,11 @@ static String pendingMqttPass;
 
 // 设备热点名称：SMSHub-XXXXXX（MAC 后六位）
 String wifiProvisioningServiceName() {
-  String mac = WiFi.macAddress();
-  mac.replace(":", "");
-  mac.toUpperCase();
-  if (mac.length() > 6) mac = mac.substring(mac.length() - 6);
-  return String(WIFI_PROV_SERVICE_PREFIX) + "-" + mac;
+  uint8_t mac[6] = {};
+  esp_read_mac(mac, ESP_MAC_WIFI_STA);
+  char suffix[7];
+  snprintf(suffix, sizeof(suffix), "%02X%02X%02X", mac[3], mac[4], mac[5]);
+  return String(WIFI_PROV_SERVICE_PREFIX) + "-" + suffix;
 }
 
 static void saveHubConfig(const String& mqttBroker, const String& mqttUser, const String& mqttPass);
@@ -105,11 +106,14 @@ static void clearWiFiCredentials() {
 static void onWiFiEvent(arduino_event_t* event) {
   switch (event->event_id) {
     case ARDUINO_EVENT_WIFI_STA_GOT_IP:
-      logCaptureLn(String("WiFi 已连接, IP: ") + WiFi.localIP().toString());
+      if (!wifiWasConnected) {
+        logCaptureLn(String("WiFi 已连接, IP: ") + WiFi.localIP().toString());
+      }
+      wifiWasConnected = true;
       break;
     case ARDUINO_EVENT_WIFI_STA_DISCONNECTED:
-      wifiConnectionLost = true;
-      logCaptureLn(String("WiFi 已断开"));
+      if (wifiWasConnected) logCaptureLn(String("WiFi 已断开，等待自动重连"));
+      wifiWasConnected = false;
       break;
     default:
       break;
@@ -182,11 +186,6 @@ void saveProvisionedConfig(const String& ssid, const String& password, const Str
 }
 
 static void applyPendingConfiguration() {
-  if (wifiConnectionLost) {
-    wifiConnectionLost = false;
-    terminalClientConfigChanged();
-  }
-
   if (pendingTerminalConfig) {
     pendingTerminalConfig = false;
     terminalClientConfigChanged();

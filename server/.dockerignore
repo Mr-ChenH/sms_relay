@@ -1,5 +1,14 @@
 .git
 .gitignore
+**/.DS_Store
+**/*.log
+**/*.tmp
+**/*.db
+**/*.db-shm
+**/*.db-wal
+**/coverage.out
+**/tmp
+**/.cache
 api/Dockerfile*
 api/**/*.test
 apprise/attach
@@ -7,7 +16,9 @@ apprise/config
 apprise/plugin
 data
 smshub
+smshub.exe*
 tools
 web/dist
 web/node_modules
+web/*.tsbuildinfo
 npm-debug.log*

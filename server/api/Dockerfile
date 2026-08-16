@@ -5,15 +5,19 @@ RUN npm ci
 COPY web/ ./
 RUN npm run build
 
-FROM golang:1.25-bookworm AS lpac-build
+FROM debian:bookworm-slim AS lpac-build
 ARG LPAC_VERSION=v2.2.1
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential ca-certificates cmake git libcurl4-openssl-dev libpcsclite-dev pkg-config \
+    build-essential ca-certificates cmake git libcurl4-openssl-dev \
     && rm -rf /var/lib/apt/lists/*
 RUN git clone --depth 1 --branch "${LPAC_VERSION}" https://github.com/estkme-group/lpac.git /src/lpac \
-    && cmake -S /src/lpac -B /src/lpac/build -DLPAC_WITH_APDU_PCSC=OFF -DLPAC_WITH_HTTP_CURL=ON \
-    && cmake --build /src/lpac/build --parallel \
-    && cmake --install /src/lpac/build
+    && cmake -S /src/lpac -B /src/lpac/build \
+        -DCMAKE_BUILD_TYPE=MinSizeRel \
+        -DLPAC_WITH_APDU_PCSC=OFF \
+        -DLPAC_WITH_APDU_AT=OFF \
+        -DLPAC_WITH_HTTP_CURL=ON \
+    && cmake --build /src/lpac/build --parallel --target lpac \
+    && strip /src/lpac/build/output/lpac
 
 FROM golang:1.25-bookworm AS api-build
 WORKDIR /src/api
@@ -30,7 +34,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates
     && useradd --uid 10001 --gid smshub --create-home --home-dir /app smshub \
     && mkdir -p /app/web /data \
     && chown -R smshub:smshub /app /data
-COPY --from=lpac-build /usr/local/ /usr/local/
+COPY --from=lpac-build /src/lpac/build/output/lpac /usr/local/bin/lpac
 COPY --from=api-build /out/smshub /usr/local/bin/smshub
 COPY api/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 COPY --from=web-build --chown=smshub:smshub /src/web/dist/ /app/web/
