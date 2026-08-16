@@ -33,26 +33,26 @@ const logs = ref<LogEntry[]>([])
 const audit = ref<AuditLog[]>([])
 const commands = ref<DeviceCommand[]>([])
 const globalSearch = ref('')
+const selectedDeviceId = ref('')
 const smsQuery = ref('')
 const smsPage = ref(1)
 const smsPageSize = ref(10)
 const selectedSmsId = ref('')
 const selectedSms = computed<SMSMessage | null>(() => sms.value?.items.find((item) => item.id === selectedSmsId.value) ?? sms.value?.items[0] ?? null)
 const smsActionResult = ref('')
-const selectedEsimDeviceId = ref('')
 const selectedSubscriptionDeviceId = ref('')
 const selectedSubscriptionProfileId = ref('')
 const subscriptionDialogDeviceId = ref('')
-const selectedEsimDevice = computed(() => devices.value.find((device) => device.id === selectedEsimDeviceId.value) ?? null)
+const selectedEsimDevice = computed(() => devices.value.find((device) => device.id === selectedDeviceId.value) ?? null)
 const selectedSubscriptionDevice = computed(() => devices.value.find((device) => device.id === selectedSubscriptionDeviceId.value) ?? null)
-const selectedDeviceProfiles = computed(() => profiles.value.filter((profile) => profile.deviceId === selectedEsimDeviceId.value))
-const selectedDeviceEsimSyncLog = computed(() => logs.value.find((row) => row.deviceId === selectedEsimDeviceId.value && (row.message.includes('esim profile sync failed') || row.message.includes('eSIM profiles uploaded'))))
+const selectedDeviceProfiles = computed(() => profiles.value.filter((profile) => profile.deviceId === selectedDeviceId.value))
+const selectedDeviceEsimSyncLog = computed(() => logs.value.find((row) => row.deviceId === selectedDeviceId.value && (row.message.includes('esim profile sync failed') || row.message.includes('eSIM profiles uploaded'))))
 const selectedDeviceTasks = computed<EsimOperationTask[]>(() => {
   const downloads: EsimOperationTask[] = esimTasks.value
-    .filter((task) => task.deviceId === selectedEsimDeviceId.value)
+    .filter((task) => task.deviceId === selectedDeviceId.value)
     .map((task) => ({ ...task }))
   const profileCommands: EsimOperationTask[] = commands.value
-    .filter((command) => command.deviceId === selectedEsimDeviceId.value && ['esim_enable_profile', 'esim_delete_profile', 'esim_refresh_profiles'].includes(command.type))
+    .filter((command) => command.deviceId === selectedDeviceId.value && ['esim_enable_profile', 'esim_delete_profile', 'esim_refresh_profiles'].includes(command.type))
     .map((command) => commandOperationTask(command))
   return [...downloads, ...profileCommands].sort((a, b) => {
     const timeDiff = new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime()
@@ -66,7 +66,7 @@ const activeEsimProfile = computed(() => selectedDeviceProfiles.value.find((prof
 const esimCommandPage = ref(1)
 const esimCommandPageSize = ref(10)
 const selectedEsimCommands = computed(() => commands.value
-  .filter((item) => item.deviceId === selectedEsimDeviceId.value && item.type.startsWith('esim_'))
+  .filter((item) => item.deviceId === selectedDeviceId.value && item.type.startsWith('esim_'))
   .sort((a, b) => {
     const timeDiff = new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
     if (timeDiff !== 0) return timeDiff
@@ -139,9 +139,9 @@ const esimSubscriptionForm = ref({
 const esimSubscriptionResult = ref('')
 
 function applyDeviceDefaults(devs = devices.value) {
-  if (!sendForm.value.deviceId && devs.length > 0) sendForm.value.deviceId = devs[0].id
-  if (!toolDeviceId.value && devs.length > 0) toolDeviceId.value = devs[0].id
-  if (!selectedEsimDeviceId.value && devs.length > 0) selectedEsimDeviceId.value = devs[0].id
+  if (!selectedDeviceId.value && devs.length > 0) selectedDeviceId.value = devs[0].id
+  if (!sendForm.value.deviceId && devs.length > 0) sendForm.value.deviceId = selectedDeviceId.value
+  if (!toolDeviceId.value && devs.length > 0) toolDeviceId.value = selectedDeviceId.value
   if (!selectedSubscriptionDeviceId.value && devs.length > 0) selectedSubscriptionDeviceId.value = devs[0].id
   if (!subscriptionDialogDeviceId.value && devs.length > 0) subscriptionDialogDeviceId.value = devs[0].id
 }
@@ -327,8 +327,12 @@ async function loadPageData(target: Page) {
   }
 }
 
-watch(selectedEsimDeviceId, () => {
+watch(selectedDeviceId, (deviceId) => {
   esimCommandPage.value = 1
+  if (deviceId) {
+    toolDeviceId.value = deviceId
+    sendForm.value.deviceId = deviceId
+  }
 })
 
 watch(esimCommandPageSize, () => {
@@ -396,7 +400,7 @@ async function copySelectedSms() {
 
 function openSelectedSmsDevice() {
   if (!selectedSms.value) return
-  selectedEsimDeviceId.value = selectedSms.value.deviceId
+  selectedDeviceId.value = selectedSms.value.deviceId
   toolDeviceId.value = selectedSms.value.deviceId
   page.value = 'tools'
 }
@@ -409,7 +413,7 @@ async function createSendTask() {
 async function createEsimTask() {
   esimTaskResult.value = ''
   const payload: CreateEsimTaskRequest = {
-    deviceId: selectedEsimDeviceId.value,
+    deviceId: selectedDeviceId.value,
     activationCode: esimTaskForm.value.activationCode.trim(),
     smdpAddress: esimTaskForm.value.smdpAddress.trim(),
     confirmationCode: esimTaskForm.value.confirmationCode.trim()
@@ -942,13 +946,13 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <AppShell v-model:page="page" v-model:global-search="globalSearch" v-model:tool-device-id="toolDeviceId" :devices="devices" @refresh="loadAll" @global-search="runGlobalSearch">
+  <AppShell v-model:page="page" v-model:global-search="globalSearch" v-model:selected-device-id="selectedDeviceId" :devices="devices" @refresh="loadAll" @global-search="runGlobalSearch">
         <div v-if="error" class="alert danger">{{ error }}</div>
         <div v-if="loading" class="card empty">加载中...</div>
 
         <OverviewPage v-if="!loading && page === 'overview' && dashboard" :dashboard="dashboard" @open-routes="page = 'routes'" @open-sms="page = 'sms'" />
 
-        <DevicesPage v-if="!loading && page === 'devices'" :devices="devices" :saving-id="deviceSavingId" @rename="renameDevice" @open-tools="(deviceId?: string) => { if (deviceId) toolDeviceId = deviceId; page = 'tools' }" @open-esim="(deviceId: string) => { selectedEsimDeviceId = deviceId; page = 'esim' }" />
+        <DevicesPage v-if="!loading && page === 'devices'" :devices="devices" :saving-id="deviceSavingId" @rename="renameDevice" @open-tools="(deviceId?: string) => { if (deviceId) selectedDeviceId = deviceId; page = 'tools' }" @open-esim="(deviceId: string) => { selectedDeviceId = deviceId; page = 'esim' }" />
 
         <EsimProfilesPage v-if="!loading && page === 'esim-profiles'" :profiles="profiles" :devices="devices" :subscriptions="esimSubscriptions" :saving-id="profileSavingId" @refresh="loadAll" @save="saveProfileMetadata" />
 
@@ -1043,9 +1047,9 @@ onBeforeUnmount(() => {
             <div class="toolbar"><button class="btn" @click="loadAll()">刷新页面</button><button class="btn primary" :disabled="!selectedEsimDevice || selectedEsimDevice.status !== 'online' || profileRefreshBusy" @click="refreshTerminalProfiles">{{ profileRefreshBusy ? '提交中' : '读取终端 Profile' }}</button></div>
           </div>
 
-          <div class="card esim-device-bar">
-            <div class="esim-device-select"><label>目标终端</label><select v-model="selectedEsimDeviceId" class="field"><option v-for="device in devices" :key="device.id" :value="device.id">{{ device.name }} / {{ device.phoneNumber || '号码未知' }} / {{ device.status === 'online' ? '在线' : '离线' }}</option></select></div>
-            <template v-if="selectedEsimDevice">
+          <div v-if="selectedEsimDevice" class="card esim-device-bar">
+            <div class="esim-device-current"><span>当前终端</span><b>{{ selectedEsimDevice.name }}</b><small class="mono">{{ selectedEsimDevice.deviceId }}</small></div>
+            <template>
               <div class="esim-device-stat"><span>状态</span><b><span :class="['status', statusClass(selectedEsimDevice.status)]">{{ selectedEsimDevice.status === 'online' ? '在线' : '离线' }}</span></b></div>
               <div class="esim-device-stat"><span>当前号码</span><b class="mono">{{ selectedEsimDevice.phoneNumber || '-' }}</b></div>
               <div class="esim-device-stat"><span>运营商</span><b>{{ selectedEsimDevice.operator || '-' }}</b></div>
@@ -1055,6 +1059,7 @@ onBeforeUnmount(() => {
               <div class="esim-device-stat esim-device-secondary"><span>EID</span><b class="mono">{{ selectedEsimDevice.eid || '-' }}</b></div>
             </template>
           </div>
+          <div v-else class="card empty">请在页面顶部选择终端。</div>
 
           <section v-if="selectedEsimDevice" class="card esim-chip-panel top-gap">
             <div class="card-head"><div><b>eSIM 芯片与容量</b><small>由 eUICC 标准 EUICCInfo2 返回</small></div><span class="status info">{{ esimCategoryLabel(selectedEsimDevice.esimCategory) }}</span></div>
@@ -1093,7 +1098,7 @@ onBeforeUnmount(() => {
                   <div class="profile-actions"><button class="btn small primary" :disabled="profile.state === 'enabled' || profileCommandBusy[profile.id] || profileHasActiveCommand(profile) || selectedEsimDevice?.status !== 'online'" @click="createProfileCommand(profile, 'esim_enable_profile')">{{ profileCommandLabel(profile) }}</button><button class="btn small" :disabled="profile.state === 'enabled' || profileCommandBusy[profile.id] || profileHasActiveCommand(profile) || selectedEsimDevice?.status !== 'online'" @click="createProfileCommand(profile, 'esim_delete_profile')">删除</button></div>
                 </article>
               </div>
-              <div v-else class="empty esim-empty"><template v-if="selectedDeviceEsimSyncLog"><b>未能读取 eSIM Profile</b><small>{{ selectedDeviceEsimSyncLog.message }}</small><button class="btn small" @click="openDeviceTools(selectedEsimDeviceId)">打开诊断工具</button></template><template v-else><b>暂无 eSIM Profile</b><small>{{ esimCapabilities.profileDownload ? '上传运营商二维码或输入激活码以下载新 Profile。' : '当前服务端平台不支持下载新 Profile。' }}</small></template></div>
+              <div v-else class="empty esim-empty"><template v-if="selectedDeviceEsimSyncLog"><b>未能读取 eSIM Profile</b><small>{{ selectedDeviceEsimSyncLog.message }}</small><button class="btn small" @click="openDeviceTools(selectedDeviceId)">打开诊断工具</button></template><template v-else><b>暂无 eSIM Profile</b><small>{{ esimCapabilities.profileDownload ? '上传运营商二维码或输入激活码以下载新 Profile。' : '当前服务端平台不支持下载新 Profile。' }}</small></template></div>
             </section>
 
             <aside class="card esim-task-center">

@@ -4,7 +4,7 @@ import { navItems } from '../utils/ui'
 
 const page = defineModel<Page>('page', { required: true })
 const globalSearch = defineModel<string>('globalSearch', { required: true })
-const toolDeviceId = defineModel<string>('toolDeviceId', { required: true })
+const selectedDeviceId = defineModel<string>('selectedDeviceId', { required: true })
 
 defineProps<{ devices: Device[] }>()
 
@@ -29,7 +29,7 @@ const emit = defineEmits<{
     <main class="main">
       <header class="topbar">
         <input v-model="globalSearch" class="search" placeholder="搜索终端、手机号、ICCID、短信内容" @keydown.enter="emit('globalSearch')" />
-        <select v-model="toolDeviceId" class="select"><option value="">全部终端</option><option v-for="device in devices" :key="device.id" :value="device.id">{{ device.name }} / {{ device.iccid }}</option></select>
+        <select v-model="selectedDeviceId" class="select"><option v-for="device in devices" :key="device.id" :value="device.id">{{ device.name }} / {{ device.phoneNumber || device.iccid || '未识别' }}</option></select>
         <button class="btn" @click="emit('refresh')">刷新</button>
         <button class="btn primary" @click="page = 'devices'">终端列表</button>
       </header>
