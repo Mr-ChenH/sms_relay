@@ -20,6 +20,8 @@ RUN git clone --depth 1 --branch "${LPAC_VERSION}" https://github.com/estkme-gro
     && strip /src/lpac/build/output/lpac
 
 FROM golang:1.25-bookworm AS api-build
+ARG GOPROXY=https://proxy.golang.org,direct
+ENV GOPROXY=${GOPROXY}
 WORKDIR /src/api
 COPY api/go.mod api/go.sum ./
 RUN go mod download

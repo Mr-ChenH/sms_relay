@@ -46,6 +46,16 @@ API data is persisted in the bind-mounted `server/data` directory, so the SQLite
 
 When upgrading an older deployment, pull the current image before starting it. Do not set Compose `user:`, because the entrypoint needs its initial root process to initialize bind-mount permissions.
 
+## Publish the Docker Image
+
+From the repository root, publish `xmoli/sms-relay:latest` with:
+
+```bash
+./scripts/publish-docker.sh
+```
+
+Pass a version to publish both `latest` and that version, for example `./scripts/publish-docker.sh 1.0.2`. The script requires a clean branch synchronized with GitHub and an existing Docker Hub login. See the root README for configuration variables and verification details.
+
 ## Run API Locally
 
 Install the pinned lpac release once when eSIM Profile download is needed:

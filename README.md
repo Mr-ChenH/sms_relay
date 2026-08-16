@@ -553,6 +553,32 @@ npm run build
 
 前端没有独立的单元测试脚本；`npm run build` 会先执行 `vue-tsc` 类型检查，再执行 Vite 生产构建。
 
+### 自动发布 Docker 镜像
+
+发布脚本会检查工作区、fast-forward 拉取远端分支、构建并测试镜像，然后推送到 Docker Hub：
+
+```bash
+# 发布 xmoli/sms-relay:latest
+./scripts/publish-docker.sh
+
+# 同时发布 latest 和指定版本标签
+./scripts/publish-docker.sh 1.0.2
+```
+
+执行前需要完成 `docker login`，并确保当前分支没有未提交或未推送的修改。脚本默认使用 `origin`、当前分支和 `xmoli/sms-relay`，可通过环境变量覆盖：
+
+```bash
+IMAGE=yourname/sms-relay \
+REMOTE=origin \
+BRANCH=master \
+GOPROXY=https://goproxy.cn,direct \
+PUSH_RETRIES=3 \
+NO_CACHE=1 \
+./scripts/publish-docker.sh 1.0.2
+```
+
+脚本会验证 API、Web、MQTT、SQLite 数据卷、非 root 运行身份和 lpac 依赖；任何步骤失败都不会继续推送。
+
 ## 项目目录
 
 ```text
