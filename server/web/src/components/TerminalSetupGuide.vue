@@ -16,8 +16,9 @@ const serverHost = computed(() => {
     return fallbackHost.value
   }
 })
-const serverPayload = computed(() => `SERVER|${serverHost.value}`)
-const wifiPayloadExample = computed(() => `你的WiFi名称|你的WiFi密码|${serverHost.value}`)
+const hotspotName = 'SMSHub-XXXXXX'
+const provisioningUrl = 'http://192.168.4.1'
+const hubAddress = computed(() => serverHost.value)
 const usingLocalhost = computed(() => ['localhost', '127.0.0.1', '::1'].includes(serverHost.value))
 
 onMounted(async () => {
@@ -31,33 +32,31 @@ onMounted(async () => {
 
 <template>
   <div class="card setup-guide">
-    <div class="card-head"><b>终端 BLE 接入配置</b><span class="status info">MQTT only</span></div>
+    <div class="card-head"><b>终端 SoftAP 接入配置</b><span class="status info">WiFi + MQTT</span></div>
     <div class="setup-body">
       <div>
-        <h2>BLE GATT 写入值</h2>
+        <h2>配网入口</h2>
         <dl class="setup-kv">
-          <dt>服务名</dt><dd class="mono">SMSCFG-xxxxxx</dd>
-          <dt>服务 UUID</dt><dd class="mono">7d6d0001-5f36-4f64-8f2b-ec2a7b3d0101</dd>
-          <dt>写入特征 UUID</dt><dd class="mono">7d6d0002-5f36-4f64-8f2b-ec2a7b3d0101</dd>
-          <dt>状态特征 UUID</dt><dd class="mono">7d6d0003-5f36-4f64-8f2b-ec2a7b3d0101</dd>
-          <dt>服务器地址</dt><dd class="mono">{{ serverHost }}</dd>
+          <dt>终端热点</dt><dd class="mono">{{ hotspotName }}</dd>
+          <dt>配网页地址</dt><dd class="mono">{{ provisioningUrl }}</dd>
+          <dt>服务器地址</dt><dd class="mono">{{ hubAddress }}</dd>
           <dt>管理 API</dt><dd class="mono">{{ apiBaseUrl }}</dd>
           <dt>MQTT 端口</dt><dd class="mono">1883</dd>
         </dl>
       </div>
       <div>
-        <h2>写入格式</h2>
+        <h2>配置步骤</h2>
         <ol class="setup-steps">
-          <li>首次配置 WiFi 和服务器：<span class="mono">SSID|PASSWORD|SERVER_HOST</span></li>
-          <li>只更新服务器：<span class="mono">SERVER|SERVER_HOST</span></li>
-          <li>服务器后端内置 MQTT，终端会自动使用 <span class="mono">http://SERVER_HOST:8080</span> 和 <span class="mono">mqtt://SERVER_HOST:1883</span></li>
+          <li>打开终端，在手机或电脑的 WiFi 列表中连接 <span class="mono">{{ hotspotName }}</span> 热点。</li>
+          <li>浏览器访问 <span class="mono">{{ provisioningUrl }}</span>，选择现场 WiFi 并输入密码。</li>
+          <li>在“SMS Hub 服务器地址”中填写 <span class="mono">{{ hubAddress }}</span>，保存后等待终端连接。</li>
         </ol>
-        <div class="setup-code mono">{{ wifiPayloadExample }}</div>
-        <div class="setup-code mono">{{ serverPayload }}</div>
+        <div class="setup-code mono">热点：{{ hotspotName }}</div>
+        <div class="setup-code mono">SMS Hub：{{ hubAddress }}</div>
       </div>
     </div>
     <div v-if="usingLocalhost" class="setup-note danger-note">当前公开配置仍指向 localhost，请在服务端设置 SMS_HUB_PUBLIC_BASE_URL 为 ESP32 可访问的服务器 IP。</div>
     <div v-else-if="configError" class="setup-note danger-note">{{ configError }}</div>
-    <div v-else class="setup-note">终端固件已移除本机 Web 管理页面，现场配置统一走 BLE。这里只需要写入服务器 IP；后端单进程同时提供管理 API 和内置 MQTT。</div>
+    <div v-else class="setup-note">终端现场配置使用 SoftAP 网页。保存成功并连接 WiFi 后热点会自动关闭；连接失败时热点会保持开启，可返回配网页重新配置。</div>
   </div>
 </template>

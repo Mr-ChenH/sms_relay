@@ -147,12 +147,7 @@ Terminal MQTT topics:
 
 SMS Hub starts an embedded MQTT broker by default, so a normal deployment only needs the `smshub` API process. The same process listens on the HTTP API address, default `:8080`, and MQTT address, default `:1883`.
 
-Terminal BLE provisioning only needs the server host/IP. The firmware derives `http://SERVER_HOST:8080` and `mqtt://SERVER_HOST:1883` automatically:
-
-```text
-SSID|PASSWORD|SERVER_HOST
-SERVER|SERVER_HOST
-```
+Terminal SoftAP provisioning needs the local WiFi credentials and server host/IP. Power on the terminal, connect to its `SMSHub-XXXXXX` hotspot, then open `http://192.168.4.1`. Select the local WiFi, enter its password, and set the SMS Hub server address. The terminal derives `http://SERVER_HOST:8080` and `mqtt://SERVER_HOST:1883` automatically. The hotspot closes after a successful connection and stays available when connection fails.
 
 Set `SMS_HUB_EMBEDDED_MQTT=false` and `SMS_HUB_MQTT_BROKER=tcp://host:1883` only when using an external broker.
 
