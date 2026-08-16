@@ -457,8 +457,8 @@ function formatEsimMemory(bytes: number) {
 }
 
 function esimCategoryLabel(value: string) {
-  const labels: Record<string, string> = { basic: '基础 eUICC', medium: '中型 eUICC', contactless: '非接触式 eUICC', other: '其他' }
-  return labels[value] || value || '未知'
+  const labels: Record<string, string> = { basic: '基础 eUICC', medium: '中型 eUICC', contactless: '非接触式 eUICC', other: '其他 eUICC' }
+  return labels[value] || value || '芯片未报告类型'
 }
 
 function signalLabel(rssi: number) {
@@ -1062,7 +1062,7 @@ onBeforeUnmount(() => {
               <div class="esim-chip-memory"><span>剩余非易失存储</span><b>{{ formatEsimMemory(selectedEsimDevice.esimFreeNvMemory) }}</b><small>Profile 与应用持久存储空间</small></div>
               <div class="esim-chip-memory"><span>总非易失存储</span><b>芯片未提供</b><small>SGP.22 EUICCInfo2 不包含总容量字段</small></div>
               <div class="esim-chip-memory"><span>剩余易失内存</span><b>{{ formatEsimMemory(selectedEsimDevice.esimFreeVolatileMemory) }}</b><small>eUICC 运行时可用内存</small></div>
-              <div class="esim-chip-memory"><span>已安装应用</span><b>{{ selectedEsimDevice.esimInstalledApplications || '未知' }}</b><small>芯片报告的应用数量</small></div>
+              <div class="esim-chip-memory"><span>已安装应用</span><b>{{ selectedEsimDevice.esimInstalledApplications ?? '未知' }}</b><small>eUICC 报告的应用数量，不等同于 Profile 数量</small></div>
             </div>
             <dl class="esim-chip-details">
               <div><dt>EID</dt><dd class="mono">{{ selectedEsimDevice.eid || '-' }}</dd></div>
