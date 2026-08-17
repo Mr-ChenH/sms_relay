@@ -78,6 +78,7 @@ export interface AppriseService {
   id: string
   name: string
   baseUrl: string
+  notifyTimeoutSeconds: number
   enabled: boolean
   lastStatus: string
   lastMessage: string
@@ -87,6 +88,7 @@ export interface AppriseService {
 export interface CreateAppriseServiceRequest {
   name: string
   baseUrl: string
+  notifyTimeoutSeconds: number
   enabled: boolean
 }
 

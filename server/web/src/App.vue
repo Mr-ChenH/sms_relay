@@ -118,7 +118,7 @@ const appriseForm = ref({
   bodyTemplate: '{{body}}\n\n终端: {{device}}\n时间: {{timestamp}}'
 })
 const appriseSaveResult = ref('')
-const appriseServiceForm = ref({ name: '备用 Apprise API', baseUrl: 'http://localhost:8000', enabled: true })
+const appriseServiceForm = ref({ name: '备用 Apprise API', baseUrl: 'http://localhost:8000', notifyTimeoutSeconds: 15, enabled: true })
 const editingAppriseServiceId = ref('')
 const appriseServiceResult = ref('')
 const routingRuleForm = ref({ name: '', senderContains: '', bodyKeywordsText: '', deviceIds: [] as string[], tagsText: '', targetIds: [] as string[], enabled: true })
@@ -668,6 +668,7 @@ async function saveAppriseService() {
   const payload: CreateAppriseServiceRequest = {
     name: appriseServiceForm.value.name.trim(),
     baseUrl: appriseServiceForm.value.baseUrl.trim(),
+    notifyTimeoutSeconds: appriseServiceForm.value.notifyTimeoutSeconds,
     enabled: appriseServiceForm.value.enabled
   }
   if (editingAppriseServiceId.value) {
@@ -689,13 +690,13 @@ async function saveAppriseService() {
 
 function editAppriseService(service: AppriseService) {
   editingAppriseServiceId.value = service.id
-  appriseServiceForm.value = { name: service.name, baseUrl: service.baseUrl, enabled: service.enabled }
+  appriseServiceForm.value = { name: service.name, baseUrl: service.baseUrl, notifyTimeoutSeconds: service.notifyTimeoutSeconds || 15, enabled: service.enabled }
   showAppriseServiceForm.value = true
 }
 
 function resetAppriseServiceForm() {
   editingAppriseServiceId.value = ''
-  appriseServiceForm.value = { name: '备用 Apprise API', baseUrl: 'http://localhost:8000', enabled: true }
+  appriseServiceForm.value = { name: '备用 Apprise API', baseUrl: 'http://localhost:8000', notifyTimeoutSeconds: 15, enabled: true }
   showAppriseServiceForm.value = false
 }
 
@@ -1004,7 +1005,7 @@ onBeforeUnmount(() => {
               <div class="card-head"><div><b>Apprise 服务</b><small>通知网关连接</small></div><button class="btn small" type="button" @click="showAppriseServiceForm = true">新增服务</button></div>
               <div v-if="appriseServices.length" class="routes-item-list">
                 <div v-for="service in appriseServices" :key="service.id" class="routes-item">
-                  <div class="routes-item-main"><div class="routes-item-title"><b>{{ service.name }}</b><span :class="['status', service.lastStatus === 'success' ? 'ok' : service.lastStatus === 'failed' ? 'danger' : 'gray']">{{ service.enabled ? service.lastStatus : 'disabled' }}</span></div><small class="mono">{{ service.baseUrl }}</small><small>{{ service.lastMessage || '尚未测试连接' }}</small></div>
+                  <div class="routes-item-main"><div class="routes-item-title"><b>{{ service.name }}</b><span :class="['status', service.lastStatus === 'success' ? 'ok' : service.lastStatus === 'failed' ? 'danger' : 'gray']">{{ service.enabled ? service.lastStatus : 'disabled' }}</span></div><small class="mono">{{ service.baseUrl }} · 超时 {{ service.notifyTimeoutSeconds || 15 }} 秒</small><small>{{ service.lastMessage || '尚未测试连接' }}</small></div>
                   <div class="routes-item-actions"><button class="btn small" type="button" @click="testAppriseService(service.id)">测试</button><button class="btn small" type="button" @click="editAppriseService(service)">编辑</button><button class="btn small danger" type="button" @click="deleteAppriseService(service)">删除</button></div>
                 </div>
               </div>
@@ -1029,7 +1030,7 @@ onBeforeUnmount(() => {
           </section>
 
           <div v-if="showAppriseServiceForm" class="modal-backdrop">
-            <form class="card form modal" @submit.prevent="saveAppriseService"><div class="card-head"><div><b>{{ editingAppriseServiceId ? '编辑 Apprise 服务' : '新增 Apprise 服务' }}</b><small>配置自部署 Apprise API 地址</small></div><button class="btn small" type="button" @click="resetAppriseServiceForm">关闭</button></div><label>服务名称</label><input v-model="appriseServiceForm.name" class="field" placeholder="例如：主 Apprise API" required><label>Apprise API 地址</label><input v-model="appriseServiceForm.baseUrl" class="field" type="url" placeholder="http://localhost:8000" required><label class="checkbox-row"><input v-model="appriseServiceForm.enabled" type="checkbox"> 启用通知分发</label><div class="toolbar"><button class="btn primary">{{ editingAppriseServiceId ? '保存修改' : '添加服务' }}</button><button class="btn" type="button" @click="resetAppriseServiceForm">取消</button></div></form>
+            <form class="card form modal" @submit.prevent="saveAppriseService"><div class="card-head"><div><b>{{ editingAppriseServiceId ? '编辑 Apprise 服务' : '新增 Apprise 服务' }}</b><small>配置自部署 Apprise API 地址</small></div><button class="btn small" type="button" @click="resetAppriseServiceForm">关闭</button></div><label>服务名称</label><input v-model="appriseServiceForm.name" class="field" placeholder="例如：主 Apprise API" required><label>Apprise API 地址</label><input v-model="appriseServiceForm.baseUrl" class="field" type="url" placeholder="http://localhost:8000" required><label>通知超时（秒）</label><input v-model.number="appriseServiceForm.notifyTimeoutSeconds" class="field" type="number" min="3" max="120" step="1" required><small>企业微信等渠道响应较慢时可适当增加，默认 15 秒。</small><label class="checkbox-row"><input v-model="appriseServiceForm.enabled" type="checkbox"> 启用通知分发</label><div class="toolbar"><button class="btn primary">{{ editingAppriseServiceId ? '保存修改' : '添加服务' }}</button><button class="btn" type="button" @click="resetAppriseServiceForm">取消</button></div></form>
           </div>
 
           <div v-if="showAppriseForm" class="modal-backdrop">

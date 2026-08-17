@@ -66,19 +66,21 @@ type SMSList struct {
 }
 
 type AppriseService struct {
-	ID          string    `json:"id"`
-	Name        string    `json:"name"`
-	BaseURL     string    `json:"baseUrl"`
-	Enabled     bool      `json:"enabled"`
-	LastStatus  string    `json:"lastStatus"`
-	LastMessage string    `json:"lastMessage"`
-	UpdatedAt   time.Time `json:"updatedAt"`
+	ID                   string    `json:"id"`
+	Name                 string    `json:"name"`
+	BaseURL              string    `json:"baseUrl"`
+	NotifyTimeoutSeconds int       `json:"notifyTimeoutSeconds"`
+	Enabled              bool      `json:"enabled"`
+	LastStatus           string    `json:"lastStatus"`
+	LastMessage          string    `json:"lastMessage"`
+	UpdatedAt            time.Time `json:"updatedAt"`
 }
 
 type CreateAppriseServiceRequest struct {
-	Name    string `json:"name"`
-	BaseURL string `json:"baseUrl"`
-	Enabled bool   `json:"enabled"`
+	Name                 string `json:"name"`
+	BaseURL              string `json:"baseUrl"`
+	NotifyTimeoutSeconds int    `json:"notifyTimeoutSeconds"`
+	Enabled              bool   `json:"enabled"`
 }
 
 type UpdateAppriseServiceRequest = CreateAppriseServiceRequest

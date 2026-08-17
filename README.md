@@ -444,7 +444,7 @@ Profile 下载由服务端运行的 `lpac` LPA 完成。Go API 通过 MQTT APDU 
 | --- | --- | --- |
 | `SMS_HUB_API_ADDR` | `:8080` | HTTP API 监听地址 |
 | `SMS_HUB_DB_PATH` | 根据工作目录推导 | SQLite 数据库路径 |
-| `APPRISE_BASE_URL` | `http://localhost:8000` | 默认 Apprise API 地址 |
+| `APPRISE_BASE_URL` | `http://localhost:8000` | 默认 Apprise API 地址；通知超时在管理页面的 Apprise 服务中配置，默认 15 秒 |
 | `SMS_HUB_EMBEDDED_MQTT` | `true` | 是否启动内置 MQTT Broker |
 | `SMS_HUB_MQTT_ADDR` | `:1883` | 内置 MQTT 监听地址 |
 | `SMS_HUB_MQTT_BROKER` | 内置时为 `tcp://127.0.0.1:1883` | Go MQTT Bridge 连接地址 |
@@ -454,7 +454,7 @@ Profile 下载由服务端运行的 `lpac` LPA 完成。Go API 通过 MQTT APDU 
 | `SMS_HUB_PUBLIC_BASE_URL` | 空 | 管理台展示给终端的公开 API 地址 |
 | `SMS_HUB_PUBLIC_MQTT_BROKER` | 空 | 管理台展示给终端的公开 MQTT 地址 |
 | `LPAC_PATH` | `lpac` | Linux 服务端 lpac 可执行文件路径；Windows 不支持下载 |
-| `TZ` | 使用系统时区；Docker Compose 默认为 `Asia/Shanghai` | 转发消息等服务端时间的本地时区，例如 `Asia/Shanghai`、`America/New_York` |
+| `TZ` | 使用系统时区；Docker Compose 默认为 `Asia/Shanghai` | 服务启动时显式加载的 IANA 时区，用于转发模板、统计和调度，例如 `Asia/Shanghai`、`America/New_York`；配置无效时服务拒绝启动 |
 | `SMS_HUB_MCP_TOKEN` | 空 | MCP Bearer Token；为空时 `/mcp` 不启用 |
 | `SMS_HUB_MCP_ALLOW_WRITE` | `false` | 是否允许 MCP 调用 `send_sms` 等写操作 |
 

@@ -102,6 +102,9 @@ func (s *Store) initSQLite(ctx context.Context) error {
 	s.devices = state.Devices
 	s.sms = state.SMS
 	s.appriseServices = state.AppriseServices
+	for i := range s.appriseServices {
+		s.appriseServices[i].NotifyTimeoutSeconds = normalizeNotifyTimeout(s.appriseServices[i].NotifyTimeoutSeconds)
+	}
 	s.appriseTargets = state.AppriseTargets
 	s.rules = state.Rules
 	s.esimProfiles = state.EsimProfiles
@@ -293,7 +296,7 @@ func (s *Store) CreateAppriseService(req model.CreateAppriseServiceRequest) (mod
 	if !strings.HasPrefix(baseURL, "http://") && !strings.HasPrefix(baseURL, "https://") {
 		return model.AppriseService{}, errors.New("baseUrl must start with http:// or https://")
 	}
-	service := model.AppriseService{ID: s.nextIDStringLocked("apprise-service"), Name: name, BaseURL: baseURL, Enabled: req.Enabled, LastStatus: "not_tested", LastMessage: "配置已保存，尚未测试连接", UpdatedAt: time.Now()}
+	service := model.AppriseService{ID: s.nextIDStringLocked("apprise-service"), Name: name, BaseURL: baseURL, NotifyTimeoutSeconds: normalizeNotifyTimeout(req.NotifyTimeoutSeconds), Enabled: req.Enabled, LastStatus: "not_tested", LastMessage: "配置已保存，尚未测试连接", UpdatedAt: time.Now()}
 	s.appriseServices = append(s.appriseServices, service)
 	s.audit = append([]model.AuditLog{{ID: s.nextIDStringLocked("audit"), Actor: "admin", DeviceName: "-", Action: "create_apprise_service", ParameterSummary: service.Name + " / " + service.BaseURL, Result: "success", CreatedAt: time.Now()}}, s.audit...)
 	return service, nil
@@ -319,6 +322,7 @@ func (s *Store) UpdateAppriseService(id string, req model.UpdateAppriseServiceRe
 		if s.appriseServices[i].ID == id {
 			s.appriseServices[i].Name = name
 			s.appriseServices[i].BaseURL = baseURL
+			s.appriseServices[i].NotifyTimeoutSeconds = normalizeNotifyTimeout(req.NotifyTimeoutSeconds)
 			s.appriseServices[i].Enabled = req.Enabled
 			s.appriseServices[i].LastStatus = "not_tested"
 			s.appriseServices[i].LastMessage = "配置已保存，尚未测试连接"
@@ -1891,6 +1895,19 @@ func normalizeSubscriptionType(value string) string {
 	default:
 		return "recharge"
 	}
+}
+
+func normalizeNotifyTimeout(seconds int) int {
+	if seconds == 0 {
+		return 15
+	}
+	if seconds < 3 {
+		return 3
+	}
+	if seconds > 120 {
+		return 120
+	}
+	return seconds
 }
 
 func normalizeBaseURL(baseURL string) string {

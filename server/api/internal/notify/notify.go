@@ -11,6 +11,11 @@ import (
 	"time"
 )
 
+const (
+	defaultRequestTimeout = 15 * time.Second
+	defaultCheckTimeout   = 5 * time.Second
+)
+
 type Client struct {
 	defaultBaseURL string
 	http           *http.Client
@@ -31,15 +36,18 @@ type Result struct {
 }
 
 func NewClient(defaultBaseURL string) *Client {
-	return &Client{defaultBaseURL: normalizeBaseURL(defaultBaseURL), http: &http.Client{Timeout: 5 * time.Second}}
+	return &Client{defaultBaseURL: normalizeBaseURL(defaultBaseURL), http: &http.Client{}}
 }
 
 func (c *Client) Notify(ctx context.Context, msg Message) Result {
-	return c.NotifyAt(ctx, c.defaultBaseURL, msg)
+	return c.NotifyAt(ctx, c.defaultBaseURL, defaultRequestTimeout, msg)
 }
 
-func (c *Client) NotifyAt(ctx context.Context, baseURL string, msg Message) Result {
+func (c *Client) NotifyAt(ctx context.Context, baseURL string, timeout time.Duration, msg Message) Result {
 	baseURL = normalizeBaseURL(baseURL)
+	if timeout <= 0 {
+		timeout = defaultRequestTimeout
+	}
 	key := strings.TrimSpace(msg.Key)
 	if key == "" {
 		return Result{OK: false, Message: "apprise key is required"}
@@ -53,8 +61,10 @@ func (c *Client) NotifyAt(ctx context.Context, baseURL string, msg Message) Resu
 		return Result{OK: false, Message: err.Error()}
 	}
 
+	requestContext, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
 	endpoint := baseURL + "/notify/" + url.PathEscape(key)
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(payload))
+	req, err := http.NewRequestWithContext(requestContext, http.MethodPost, endpoint, bytes.NewReader(payload))
 	if err != nil {
 		return Result{OK: false, Message: err.Error()}
 	}
@@ -75,7 +85,9 @@ func (c *Client) NotifyAt(ctx context.Context, baseURL string, msg Message) Resu
 
 func (c *Client) Check(ctx context.Context, baseURL string) Result {
 	baseURL = normalizeBaseURL(baseURL)
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, baseURL+"/", nil)
+	requestContext, cancel := context.WithTimeout(ctx, defaultCheckTimeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(requestContext, http.MethodGet, baseURL+"/", nil)
 	if err != nil {
 		return Result{OK: false, Message: err.Error()}
 	}

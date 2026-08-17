@@ -359,9 +359,7 @@ func (s *Server) testAppriseService(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusNotFound, model.APIResponse{Success: false, Error: "apprise service not found"})
 		return
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), 6*time.Second)
-	defer cancel()
-	result := s.notifier.Check(ctx, service.BaseURL)
+	result := s.notifier.Check(r.Context(), service.BaseURL)
 	status := "success"
 	if !result.OK {
 		status = "failed"
@@ -431,9 +429,7 @@ func (s *Server) notifyTest(w http.ResponseWriter, r *http.Request) {
 	}
 	body := firstNonEmpty(req.Body, "SMS Hub Apprise test")
 	title := firstNonEmpty(req.Title, "SMS Hub 测试通知")
-	ctx, cancel := context.WithTimeout(r.Context(), 6*time.Second)
-	defer cancel()
-	result := s.notifier.NotifyAt(ctx, service.BaseURL, notify.Message{Key: target.ConfigKey, Tag: strings.Join(target.Tags, ","), Title: title, Body: body, Type: "info"})
+	result := s.notifier.NotifyAt(r.Context(), service.BaseURL, time.Duration(service.NotifyTimeoutSeconds)*time.Second, notify.Message{Key: target.ConfigKey, Tag: strings.Join(target.Tags, ","), Title: title, Body: body, Type: "info"})
 	status := "success"
 	if !result.OK {
 		status = "failed"
@@ -613,9 +609,7 @@ func (s *Server) dispatchSMS(parent context.Context, sms model.SMSMessage) []mod
 			continue
 		}
 		title, body, tag := store.RenderAppriseMessage(target, sms)
-		ctx, cancel := context.WithTimeout(parent, 6*time.Second)
-		result := s.notifier.NotifyAt(ctx, service.BaseURL, notify.Message{Key: target.ConfigKey, Tag: tag, Title: title, Body: body, Type: "info"})
-		cancel()
+		result := s.notifier.NotifyAt(parent, service.BaseURL, time.Duration(service.NotifyTimeoutSeconds)*time.Second, notify.Message{Key: target.ConfigKey, Tag: tag, Title: title, Body: body, Type: "info"})
 		status := "success"
 		if !result.OK {
 			status = "failed"

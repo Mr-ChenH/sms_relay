@@ -22,6 +22,13 @@ import (
 )
 
 func main() {
+	timezone, err := configureTimezone()
+	if err != nil {
+		log.Fatal(err)
+	}
+	_, offset := time.Now().Zone()
+	log.Printf("server timezone=%s offset=%+03d:%02d", timezone, offset/3600, abs(offset%3600)/60)
+
 	addr := os.Getenv("SMS_HUB_API_ADDR")
 	if addr == "" {
 		addr = ":8080"
@@ -102,6 +109,13 @@ func main() {
 	}
 }
 
+func abs(value int) int {
+	if value < 0 {
+		return -value
+	}
+	return value
+}
+
 func runSubscriptionReminders(ctx context.Context, s *store.Store, notifier *notify.Client) {
 	ticker := time.NewTicker(time.Minute)
 	defer ticker.Stop()
@@ -163,7 +177,7 @@ func notifySubscription(ctx context.Context, s *store.Store, notifier *notify.Cl
 		if !ok || !service.Enabled {
 			continue
 		}
-		result := notifier.NotifyAt(ctx, service.BaseURL, notify.Message{Key: target.ConfigKey, Tag: strings.Join(target.Tags, ","), Title: title, Body: body, Type: "info"})
+		result := notifier.NotifyAt(ctx, service.BaseURL, time.Duration(service.NotifyTimeoutSeconds)*time.Second, notify.Message{Key: target.ConfigKey, Tag: strings.Join(target.Tags, ","), Title: title, Body: body, Type: "info"})
 		notified = notified || result.OK
 		status := "failed"
 		if result.OK {
