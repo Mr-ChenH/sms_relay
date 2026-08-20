@@ -82,21 +82,24 @@ static void stripTerminator(String* line) {
   }
 }
 
+bool esimParseRequiredATPayload(const String& response, const char* prefix, String* payload) {
+  if (!payload || !prefix || prefix[0] == '\0') return false;
+  int index = response.indexOf(prefix);
+  if (index < 0) return false;
+  int start = index + strlen(prefix);
+  int end = response.indexOf('\n', start);
+  if (end < 0) end = response.length();
+  String line = response.substring(start, end);
+  line.trim();
+  stripTerminator(&line);
+  if (line.length() == 0) return false;
+  *payload = line;
+  return true;
+}
+
 bool esimParseATPayload(const String& response, const char* prefix, String* payload) {
   if (!payload) return false;
-  int index = response.indexOf(prefix);
-  if (index >= 0) {
-    int start = index + strlen(prefix);
-    int end = response.indexOf('\n', start);
-    if (end < 0) end = response.length();
-    String line = response.substring(start, end);
-    line.trim();
-    if (line.length() > 0) {
-      stripTerminator(&line);
-      *payload = line;
-      return true;
-    }
-  }
+  if (esimParseRequiredATPayload(response, prefix, payload)) return true;
   if (!firstDataLine(response, payload)) return false;
   stripTerminator(payload);
   return payload->length() > 0;

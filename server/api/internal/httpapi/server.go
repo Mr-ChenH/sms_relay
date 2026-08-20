@@ -594,7 +594,8 @@ func (s *Server) deleteEsimSubscription(w http.ResponseWriter, r *http.Request) 
 }
 
 func (s *Server) logs(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, model.APIResponse{Success: true, Data: s.store.Logs()})
+	deviceID := strings.TrimSpace(r.URL.Query().Get("deviceId"))
+	writeJSON(w, http.StatusOK, model.APIResponse{Success: true, Data: s.store.LogsByDevice(deviceID)})
 }
 
 func (s *Server) clearLogs(w http.ResponseWriter, r *http.Request) {

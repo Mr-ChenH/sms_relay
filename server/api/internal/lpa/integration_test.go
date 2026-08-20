@@ -3,6 +3,7 @@ package lpa
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -28,6 +29,14 @@ func (f *fakeTransport) Exchange(_ context.Context, _ string, request APDUReques
 		response.Data = "9000"
 	}
 	return response, nil
+}
+
+type failingTransport struct {
+	err error
+}
+
+func (f *failingTransport) Exchange(_ context.Context, _ string, _ APDURequest) (APDUResponse, error) {
+	return APDUResponse{ECode: -1, Error: f.err.Error()}, f.err
 }
 
 type fakeUpdater struct {
@@ -128,6 +137,40 @@ exit 1
 	}
 }
 
+func TestRunnerIncludesTerminalAPDUErrorWithEuiccInit(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("test fixture uses a POSIX shell script")
+	}
+	script := filepath.Join(t.TempDir(), "fake-lpac")
+	contents := `#!/bin/sh
+printf '%s\n' '{"type":"apdu","payload":{"func":"connect","param":null}}'
+IFS= read -r response
+printf '%s\n' '{"type":"lpa","payload":{"code":-1,"message":"euicc_init","data":""}}'
+exit 1
+`
+	if err := os.WriteFile(script, []byte(contents), 0700); err != nil {
+		t.Fatal(err)
+	}
+	updater := &fakeUpdater{done: make(chan struct{})}
+	runner := NewRunner(&failingTransport{err: errors.New("eUICC initialization failed: logic channel open failed: +MATREADY")}, updater)
+	runner.binary = script
+	runner.timeout = 5 * time.Second
+	if err := runner.Start("task-1", "device-1", "LPA:1$example$matching", ""); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-updater.done:
+	case <-time.After(6 * time.Second):
+		t.Fatal("runner did not finish")
+	}
+	updater.mu.Lock()
+	defer updater.mu.Unlock()
+	got := updater.updates[len(updater.updates)-1]
+	want := "failed:下载失败：euicc_init；终端 APDU：eUICC initialization failed: logic channel open failed: +MATREADY"
+	if got != want {
+		t.Fatalf("unexpected final update: %s; want=%s; all=%v", got, want, updater.updates)
+	}
+}
 func TestRunnerEndToEndWithStdioDriver(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("test fixture uses a POSIX shell script")

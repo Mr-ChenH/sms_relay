@@ -9,27 +9,41 @@ static const uint8_t ISD_R_AID[] = {
   0xFF, 0xFF, 0xFF, 0x89, 0x00, 0x00, 0x01, 0x00
 };
 
+static bool validChannelText(const String& value) {
+  if (value.length() == 0) return false;
+  for (int i = 0; i < value.length(); i++) {
+    if (!isdigit((unsigned char)value.charAt(i))) return false;
+  }
+  int id = value.toInt();
+  return id > 0 && id <= 19;
+}
+
 static bool openChannel(String* channel) {
   String aid = esimBytesToHex(ISD_R_AID, sizeof(ISD_R_AID));
-  String response = esimSendAT((String("AT+CCHO=\"") + aid + "\"").c_str(), 10000);
+  String response;
   String payload;
-  if (!esimParseATPayload(response, "+CCHO:", &payload) && response.indexOf("+CME ERROR: 20") >= 0) {
-    for (int id = 1; id <= 8; id++) esimSendAT((String("AT+CCHC=") + id).c_str(), 2000);
+  for (int attempt = 0; attempt < 2; attempt++) {
     response = esimSendAT((String("AT+CCHO=\"") + aid + "\"").c_str(), 10000);
+    payload = "";
+    if (esimParseRequiredATPayload(response, "+CCHO:", &payload)) {
+      payload.trim();
+      if (payload.length() >= 2 && payload[0] == '"' && payload[payload.length() - 1] == '"') {
+        payload = payload.substring(1, payload.length() - 1);
+      }
+      if (validChannelText(payload)) {
+        *channel = payload;
+        return true;
+      }
+    }
+    if (attempt == 0) {
+      // Some cards answer after modem-ready URCs or leave a stale logical
+      // channel behind. Close known channels and retry once.
+      for (int id = 1; id <= 8; id++) esimSendAT((String("AT+CCHC=") + id).c_str(), 2000);
+      delay(100);
+    }
   }
-  if (!esimParseATPayload(response, "+CCHO:", &payload)) {
-    esimSetError(String("打开 eUICC 通道失败: ") + esimCompactATResponse(response));
-    return false;
-  }
-  payload.trim();
-  if (payload.length() >= 2 && payload[0] == '"' && payload[payload.length() - 1] == '"') payload = payload.substring(1, payload.length() - 1);
-  int id = payload.toInt();
-  if (id <= 0) {
-    esimSetError(String("无效 eUICC 通道号: ") + payload);
-    return false;
-  }
-  *channel = String(id);
-  return true;
+  esimSetError(String("打开 eUICC 通道失败: ") + esimCompactATResponse(response));
+  return false;
 }
 
 static void closeChannel(const String& channel) {

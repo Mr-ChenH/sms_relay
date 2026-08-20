@@ -16,6 +16,7 @@ func TestWriteAPDUResponse(t *testing.T) {
 		Payload struct {
 			ECode int    `json:"ecode"`
 			Data  string `json:"data"`
+			Error string `json:"error"`
 		} `json:"payload"`
 	}
 	if err := json.Unmarshal(output.Bytes(), &message); err != nil {
@@ -24,12 +25,27 @@ func TestWriteAPDUResponse(t *testing.T) {
 	if message.Type != "apdu" || message.Payload.ECode != 0 || message.Payload.Data != "9000" {
 		t.Fatalf("unexpected response: %+v", message)
 	}
+
+	output.Reset()
+	if err := writeAPDUResponse(&output, APDUResponse{ECode: -1, Error: "logic channel open failed"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(output.Bytes(), &message); err != nil {
+		t.Fatal(err)
+	}
+	if message.Payload.ECode != -1 || message.Payload.Error != "logic channel open failed" {
+		t.Fatalf("unexpected error response: %+v", message)
+	}
 }
 
 func TestTaskProgress(t *testing.T) {
 	stage, progress := taskProgress("es10b_load_bound_profile_package")
 	if stage != "向 eUICC 安装 Profile" || progress != 82 {
 		t.Fatalf("taskProgress() = %q, %d", stage, progress)
+	}
+	stage, progress = taskProgress("es9p_cancel_session")
+	if stage != "正在清理失败会话" || progress != 5 {
+		t.Fatalf("cancel taskProgress() = %q, %d", stage, progress)
 	}
 }
 

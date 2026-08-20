@@ -695,12 +695,19 @@ static void handleApduPayload(const String& payloadText) {
   }
 
   if (function == "connect") {
-    apduSessionConnected = true;
-    response["ecode"] = 0;
-  } else if (function == "disconnect") {
-    for (int channel = 1; channel <= 8; channel++) {
-      esimSendAT((String("AT+CCHC=") + channel).c_str(), 2000);
+    if (apduSessionConnected || apduLogicalChannel > 0) {
+      if (apduLogicalChannel > 0) esimSendAT((String("AT+CCHC=") + apduLogicalChannel).c_str(), 5000);
+      apduLogicalChannel = 0;
+      apduSessionConnected = false;
     }
+    if (!esimInit()) {
+      response["error"] = String("eUICC initialization failed: ") + esimGetLastError();
+    } else {
+      apduSessionConnected = true;
+      response["ecode"] = 0;
+    }
+  } else if (function == "disconnect") {
+    if (apduLogicalChannel > 0) esimSendAT((String("AT+CCHC=") + apduLogicalChannel).c_str(), 5000);
     apduSessionConnected = false;
     apduLogicalChannel = 0;
     response["ecode"] = 0;
@@ -713,15 +720,32 @@ static void handleApduPayload(const String& payloadText) {
     if (!esimIsHexString(param) || param.length() == 0 || param.length() > 64) {
       response["error"] = "invalid AID";
     } else {
-      String atResponse = esimSendAT((String("AT+CCHO=\"") + param + "\"").c_str(), 10000);
+      String atResponse;
       String channelText;
-      if (esimParseATPayload(atResponse, "+CCHO:", &channelText)) {
-        int channel = channelText.toInt();
-        apduLogicalChannel = channel > 0 ? channel : 0;
-        response["ecode"] = channel > 0 ? channel : -1;
-        if (channel <= 0) response["error"] = "invalid logical channel";
-      } else {
-        response["error"] = esimCompactATResponse(atResponse);
+      for (int attempt = 0; attempt < 2; attempt++) {
+        atResponse = esimSendAT((String("AT+CCHO=\"") + param + "\"").c_str(), 10000);
+        channelText = "";
+        if (esimParseRequiredATPayload(atResponse, "+CCHO:", &channelText)) {
+          channelText.trim();
+          bool digits = channelText.length() > 0;
+          for (int i = 0; i < channelText.length(); i++) {
+            if (!isdigit((unsigned char)channelText.charAt(i))) digits = false;
+          }
+          int channel = digits ? channelText.toInt() : 0;
+          if (channel > 0 && channel <= 19) {
+            apduLogicalChannel = channel;
+            response["ecode"] = channel;
+            break;
+          }
+        }
+        if (attempt == 0) {
+          if (apduLogicalChannel > 0) esimSendAT((String("AT+CCHC=") + apduLogicalChannel).c_str(), 5000);
+          apduLogicalChannel = 0;
+          delay(100);
+        }
+      }
+      if ((int)response["ecode"] < 0) {
+        response["error"] = String("logic channel open failed: ") + esimCompactATResponse(atResponse);
       }
     }
   } else if (function == "logic_channel_close") {

@@ -171,6 +171,7 @@ func (r *Runner) run(taskID, deviceID, activationCode, confirmationCode string) 
 	finalMessage := "lpac exited without a final result"
 	finalDetail := ""
 	lastExchangeError := ""
+	lastProgress := 2
 	pipeError := ""
 	pipeFailed := false
 	scanner := bufio.NewScanner(stdout)
@@ -199,6 +200,10 @@ func (r *Runner) run(taskID, deviceID, activationCode, confirmationCode string) 
 			var progress progressPayload
 			if json.Unmarshal(message.Payload, &progress) == nil {
 				stage, percent := taskProgress(progress.Message)
+				if percent < lastProgress {
+					percent = lastProgress
+				}
+				lastProgress = percent
 				_ = r.updater.UpdateEsimTask(taskID, "running", stage, percent)
 			}
 		case "lpa":
@@ -220,14 +225,20 @@ func (r *Runner) run(taskID, deviceID, activationCode, confirmationCode string) 
 	}
 	if waitErr != nil || finalCode != 0 {
 		detail := strings.TrimSpace(stderr.String())
-		if detail == "" && finalMessage != "" && finalMessage != "lpac exited without a final result" {
-			detail = finalMessage
+		lpaDetail := ""
+		if finalMessage != "" && finalMessage != "lpac exited without a final result" {
+			lpaDetail = finalMessage
 			if finalDetail != "" {
-				detail += "：" + finalDetail
+				lpaDetail += "：" + finalDetail
 			}
 		}
-		if detail == "" && lastExchangeError != "" {
-			detail = lastExchangeError
+		if detail == "" {
+			detail = lpaDetail
+		} else if lpaDetail != "" && !strings.Contains(detail, lpaDetail) {
+			detail += "；LPA：" + lpaDetail
+		}
+		if lastExchangeError != "" && !strings.Contains(detail, lastExchangeError) {
+			detail += "；终端 APDU：" + lastExchangeError
 		}
 		if detail == "" && pipeError != "" {
 			detail = "lpac closed its APDU input: " + pipeError
@@ -262,6 +273,9 @@ func writeAPDUResponse(w io.Writer, response APDUResponse) error {
 	payload := map[string]interface{}{"ecode": response.ECode}
 	if response.Data != "" {
 		payload["data"] = response.Data
+	}
+	if response.Error != "" {
+		payload["error"] = response.Error
 	}
 	message := map[string]interface{}{"type": "apdu", "payload": payload}
 	encoded, err := json.Marshal(message)
@@ -326,6 +340,8 @@ func taskProgress(message string) (string, int) {
 		"es10b_prepare_download":             {"eUICC 准备安装 Profile", 55},
 		"es9p_get_bound_profile_package":     {"下载 Bound Profile Package", 68},
 		"es10b_load_bound_profile_package":   {"向 eUICC 安装 Profile", 82},
+		"es10b_cancel_session":               {"正在清理失败会话", 5},
+		"es9p_cancel_session":                {"正在清理失败会话", 5},
 	}
 	if stage, ok := stages[message]; ok {
 		return stage.label, stage.percent

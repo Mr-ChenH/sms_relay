@@ -1305,9 +1305,27 @@ func nextSubscriptionRun(current time.Time, intervalDays int, now time.Time) tim
 }
 
 func (s *Store) Logs() []model.LogEntry {
+	return s.LogsByDevice("")
+}
+
+func (s *Store) LogsByDevice(deviceID string) []model.LogEntry {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return append([]model.LogEntry{}, s.logs...)
+	deviceID = strings.TrimSpace(deviceID)
+	if deviceID == "" {
+		return append([]model.LogEntry{}, s.logs...)
+	}
+	resolvedID := deviceID
+	if device, ok := s.findDeviceLocked(deviceID); ok {
+		resolvedID = device.ID
+	}
+	rows := make([]model.LogEntry, 0)
+	for _, row := range s.logs {
+		if row.DeviceID == resolvedID {
+			rows = append(rows, row)
+		}
+	}
+	return rows
 }
 
 func (s *Store) ClearLogs() {

@@ -8,6 +8,23 @@ import (
 	"sms-forwarding/server/api/internal/model"
 )
 
+func TestLogsByDeviceAcceptsStoreAndTerminalIDs(t *testing.T) {
+	s := &Store{
+		devices: []model.Device{{ID: "dev-1", DeviceID: "esp32-one"}, {ID: "dev-2", DeviceID: "esp32-two"}},
+		logs:    []model.LogEntry{{ID: "log-1", DeviceID: "dev-1"}, {ID: "log-2", DeviceID: "dev-2"}},
+	}
+
+	if rows := s.LogsByDevice("dev-1"); len(rows) != 1 || rows[0].ID != "log-1" {
+		t.Fatalf("store ID filter returned %+v", rows)
+	}
+	if rows := s.LogsByDevice("esp32-two"); len(rows) != 1 || rows[0].ID != "log-2" {
+		t.Fatalf("terminal ID filter returned %+v", rows)
+	}
+	if rows := s.LogsByDevice(""); len(rows) != 2 {
+		t.Fatalf("empty filter returned %d rows, want 2", len(rows))
+	}
+}
+
 func TestClearLogsPersistsEmptyLogList(t *testing.T) {
 	s := newEsimTaskTestStore(t)
 	s.logs = []model.LogEntry{{ID: "log-1", Message: "test"}}
