@@ -60,6 +60,7 @@ static int lastMqttState = 0;
 static String terminalDeviceID();
 
 static String cachedICCID;
+static String cachedIdentityICCID;
 static String cachedEID;
 static ESimInfo cachedEsimInfo = {};
 static String cachedOperator;
@@ -212,9 +213,23 @@ static void refreshIdentityCache(bool force = false) {
   // 快速 AT 查询优先：ICCID/运营商/号码第一时间推送到服务端。
   // 慢速 eUICC APDU 查询（esimGetProfiles 在 6+ Profile 的卡上可达数十秒）
   // 必须放在最后，否则会阻塞号码/运营商上报（表现为重启后长时间无号码/运营商）。
+  String previousICCID = cachedICCID;
   cachedICCID = parseMCCID(sendATCommand("AT+MCCID", 3000));
+  bool identityChanged = cachedICCID.length() > 0 && previousICCID.length() > 0 && cachedICCID != previousICCID;
+  if (identityChanged) {
+    // A profile switch can leave the modem returning the previous CNUM briefly.
+    // Never carry that number into the newly detected ICCID.
+    cachedPhoneNumber = "";
+    cachedOperator = "";
+  }
+  cachedIdentityICCID = cachedICCID;
   cachedOperator = parseOperatorName(sendATCommand("AT+COPS?", 5000));
-  cachedPhoneNumber = parsePhoneNumber(sendATCommand("AT+CNUM", 3000));
+  String queriedPhoneNumber = parsePhoneNumber(sendATCommand("AT+CNUM", 3000));
+  if (queriedPhoneNumber.length() > 0 && !identityChanged) {
+    cachedPhoneNumber = queriedPhoneNumber;
+  } else if (identityChanged) {
+    cachedPhoneNumber = "";
+  }
   cachedCellularCSQ = parseCSQ(sendATCommand("AT+CSQ", 3000));
   cachedCellularRSSI = cachedCellularCSQ == 99 ? 0 : -113 + 2 * cachedCellularCSQ;
 
@@ -226,7 +241,10 @@ static void refreshIdentityCache(bool force = false) {
     if (count >= 0) {
       for (int i = 0; i < count; i++) {
         if (profiles[i].state == 1 && profiles[i].iccid[0]) {
-          cachedICCID = profiles[i].iccid;
+          if (cachedICCID != profiles[i].iccid) {
+            cachedICCID = profiles[i].iccid;
+            cachedPhoneNumber = "";
+          }
           if (cachedOperator.length() == 0) cachedOperator = profiles[i].serviceProviderName;
           break;
         }
@@ -282,6 +300,7 @@ static void terminalHeartbeat(bool refreshIdentity = true) {
 
 void terminalClientIdentityReady() {
   cachedICCID = "";
+  cachedIdentityICCID = "";
   cachedEID = "";
   cachedOperator = "";
   cachedPhoneNumber = "";
@@ -297,9 +316,8 @@ void terminalClientIdentityReady() {
 
 static void refreshIdentityAfterProfileChange() {
   cachedICCID = "";
-  cachedOperator = "";
-  cachedPhoneNumber = "";
-  lastIdentityRefreshAt = 0;
+  cachedIdentityICCID = "";
+  cachedEID = "";
   identitySettleUntil = millis() + IDENTITY_SETTLE_WINDOW_MS;
   refreshIdentityCache(true);
   terminalHeartbeat(false);
@@ -894,6 +912,9 @@ void terminalClientService() {
 
 void terminalClientLoop() {
   if (!terminalClientEnabled() || WiFi.status() != WL_CONNECTED) return;
+
+  // Keep the MQTT socket serviced before any potentially slow modem/eSIM work.
+  // eSIM profile/APDU operations can take tens of seconds on multi-profile cards.
   terminalClientService();
   executePendingCommand();
   if (esimProfileSyncPending && mqttClient.connected() && !commandExecuting && !apduSessionConnected &&

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
+import { api } from '../api'
 import type { Device, LogEntry } from '../types'
 import PaginationBar from '../components/PaginationBar.vue'
 
@@ -16,6 +17,7 @@ const snapshot = ref<LogEntry[]>([])
 const page = ref(1)
 const pageSize = ref(10)
 const copiedId = ref('')
+const clearing = ref(false)
 
 const sourceLogs = computed(() => paused.value ? snapshot.value : props.logs)
 const levels = computed(() => Array.from(new Set(props.logs.map((row) => normalizeLevel(row.level))).values()).sort())
@@ -90,6 +92,19 @@ function exportLogs() {
   URL.revokeObjectURL(url)
 }
 
+async function clearLogs() {
+  if (props.logs.length === 0 || clearing.value) return
+  if (!window.confirm('确定清空全部日志吗？此操作不可撤销。')) return
+  clearing.value = true
+  try {
+    await api.delete('/api/admin/logs')
+    snapshot.value = []
+    page.value = 1
+  } finally {
+    clearing.value = false
+  }
+}
+
 function clearFilters() {
   query.value = ''
   deviceId.value = ''
@@ -101,7 +116,7 @@ function clearFilters() {
   <section class="page logs-page">
     <div class="page-head">
       <div><h1>日志</h1><p>筛选终端日志和服务端事件，定位连接、命令与模组异常。</p></div>
-      <div class="toolbar"><button class="btn" @click="paused = !paused">{{ paused ? '继续更新' : '暂停更新' }}</button><button class="btn primary" :disabled="filteredLogs.length === 0" @click="exportLogs">导出当前结果</button></div>
+      <div class="toolbar"><button class="btn" @click="paused = !paused">{{ paused ? '继续更新' : '暂停更新' }}</button><button class="btn danger" :disabled="logs.length === 0 || clearing" @click="clearLogs">{{ clearing ? '清空中...' : '清空日志' }}</button><button class="btn primary" :disabled="filteredLogs.length === 0" @click="exportLogs">导出当前结果</button></div>
     </div>
 
     <div class="grid cols-4 logs-metrics">

@@ -8,6 +8,16 @@ import (
 	"sms-forwarding/server/api/internal/model"
 )
 
+func TestClearLogsPersistsEmptyLogList(t *testing.T) {
+	s := newEsimTaskTestStore(t)
+	s.logs = []model.LogEntry{{ID: "log-1", Message: "test"}}
+
+	s.ClearLogs()
+	if logs := s.Logs(); len(logs) != 0 {
+		t.Fatalf("Logs() length = %d, want 0", len(logs))
+	}
+}
+
 func TestDeviceStatusAllowsBriefHeartbeatGap(t *testing.T) {
 	now := time.Now()
 	device := model.Device{LastSeenAt: now.Add(-deviceOnlineTimeout + time.Second)}
@@ -52,85 +62,47 @@ func TestDeviceStatusTransitionLogsOnce(t *testing.T) {
 
 func TestHeartbeatReplacesProfileIdentityFields(t *testing.T) {
 	s := &Store{devices: []model.Device{{
-		ID:          "dev-1",
-		DeviceID:    "esp32-test",
-		ICCID:       "old-iccid",
-		Operator:    "old-operator",
-		PhoneNumber: "old-number",
+		ID: "dev-1", DeviceID: "esp32-test", ICCID: "old-iccid", Operator: "old-operator", PhoneNumber: "old-number",
 	}}}
 
-	device, err := s.Heartbeat(model.TerminalHeartbeatRequest{
-		DeviceID:                   "esp32-test",
-		ICCID:                      "new-iccid",
-		CellularRSSI:               -85,
-		CellularCSQ:                14,
-		EsimFirmwareVersion:        "1.2.3",
-		EsimSVN:                    "2.2.0",
-		EsimProfileVersion:         "2.3.1",
-		EsimGlobalPlatformVersion:  "2.3.0",
-		EsimCategory:               "medium",
-		EsimSASAccreditationNumber: "SAS-TEST",
-		EsimInstalledApplications:  6,
-		EsimFreeNVMemory:           524288,
-		EsimFreeVolatileMemory:     32768,
-	})
+	device, err := s.Heartbeat(model.TerminalHeartbeatRequest{DeviceID: "esp32-test", ICCID: "new-iccid", CellularRSSI: -85, CellularCSQ: 14, EsimFirmwareVersion: "1.2.3", EsimSVN: "2.2.0", EsimProfileVersion: "2.3.1", EsimGlobalPlatformVersion: "2.3.0", EsimCategory: "medium", EsimSASAccreditationNumber: "SAS-TEST", EsimInstalledApplications: 6, EsimFreeNVMemory: 524288, EsimFreeVolatileMemory: 32768})
 	if err != nil {
 		t.Fatalf("Heartbeat() error = %v", err)
 	}
-	if device.ICCID != "new-iccid" {
-		t.Fatalf("ICCID = %q, want new-iccid", device.ICCID)
+	if device.ICCID != "new-iccid" || device.CellularRSSI != -85 || device.CellularCSQ != 14 {
+		t.Fatalf("identity or signal was not stored: %+v", device)
 	}
-	if device.CellularRSSI != -85 || device.CellularCSQ != 14 {
-		t.Fatalf("cellular signal = %d dBm / CSQ %d, want -85 / 14", device.CellularRSSI, device.CellularCSQ)
+	if device.Operator != "" || device.PhoneNumber != "" {
+		t.Fatalf("old identity was retained: operator=%q phone=%q", device.Operator, device.PhoneNumber)
 	}
-	if device.EsimFirmwareVersion != "1.2.3" || device.EsimSVN != "2.2.0" || device.EsimProfileVersion != "2.3.1" ||
-		device.EsimGlobalPlatformVersion != "2.3.0" || device.EsimCategory != "medium" || device.EsimSASAccreditationNumber != "SAS-TEST" ||
-		device.EsimInstalledApplications != 6 || device.EsimFreeNVMemory != 524288 || device.EsimFreeVolatileMemory != 32768 {
-		t.Fatalf("eSIM info was not stored: %+v", device)
+}
+
+func TestHeartbeatClearsOldPhoneWhenNewProfileHasNoNumber(t *testing.T) {
+	s := &Store{devices: []model.Device{{ID: "dev-1", DeviceID: "esp32-test", ICCID: "old-iccid", Operator: "old-operator", PhoneNumber: "old-number"}}}
+	device, err := s.Heartbeat(model.TerminalHeartbeatRequest{DeviceID: "esp32-test", ICCID: "new-iccid"})
+	if err != nil {
+		t.Fatalf("Heartbeat() error = %v", err)
 	}
-	if device.Operator != "" {
-		t.Fatalf("Operator = %q, want empty while new profile registers", device.Operator)
-	}
-	if device.PhoneNumber != "" {
-		t.Fatalf("PhoneNumber = %q, want empty while new profile is queried", device.PhoneNumber)
+	if device.Operator != "" || device.PhoneNumber != "" {
+		t.Fatalf("new profile retained old identity: operator=%q phone=%q", device.Operator, device.PhoneNumber)
 	}
 }
 
 func TestHeartbeatKeepsIdentityFieldsWhenNotYetReported(t *testing.T) {
-	s := &Store{devices: []model.Device{{
-		ID:          "dev-1",
-		DeviceID:    "esp32-test",
-		ICCID:       "same-iccid",
-		Operator:    "known-operator",
-		PhoneNumber: "known-number",
-	}}}
-
-	// 终端启动初期心跳可能暂不携带号码/运营商，空值应保留旧数据而非覆盖为空白
-	device, err := s.Heartbeat(model.TerminalHeartbeatRequest{
-		DeviceID: "esp32-test",
-		ICCID:    "same-iccid",
-	})
+	s := &Store{devices: []model.Device{{ID: "dev-1", DeviceID: "esp32-test", ICCID: "same-iccid", Operator: "known-operator", PhoneNumber: "known-number"}}}
+	device, err := s.Heartbeat(model.TerminalHeartbeatRequest{DeviceID: "esp32-test", ICCID: "same-iccid"})
 	if err != nil {
 		t.Fatalf("Heartbeat() error = %v", err)
 	}
-	if device.Operator != "known-operator" {
-		t.Fatalf("Operator = %q, want kept known-operator", device.Operator)
-	}
-	if device.PhoneNumber != "known-number" {
-		t.Fatalf("PhoneNumber = %q, want kept known-number", device.PhoneNumber)
+	if device.Operator != "known-operator" || device.PhoneNumber != "known-number" {
+		t.Fatalf("identity was not preserved: operator=%q phone=%q", device.Operator, device.PhoneNumber)
 	}
 
-	// 就绪后推送的新值应正常覆盖
-	device, err = s.Heartbeat(model.TerminalHeartbeatRequest{
-		DeviceID:    "esp32-test",
-		ICCID:       "same-iccid",
-		Operator:    "new-operator",
-		PhoneNumber: "new-number",
-	})
+	device, err = s.Heartbeat(model.TerminalHeartbeatRequest{DeviceID: "esp32-test", ICCID: "same-iccid", Operator: "new-operator", PhoneNumber: "new-number"})
 	if err != nil {
 		t.Fatalf("Heartbeat() error = %v", err)
 	}
 	if device.Operator != "new-operator" || device.PhoneNumber != "new-number" {
-		t.Fatalf("Operator/PhoneNumber = %q/%q, want new values", device.Operator, device.PhoneNumber)
+		t.Fatalf("identity was not updated: operator=%q phone=%q", device.Operator, device.PhoneNumber)
 	}
 }

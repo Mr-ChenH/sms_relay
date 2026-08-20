@@ -1301,6 +1301,13 @@ func (s *Store) Logs() []model.LogEntry {
 	return append([]model.LogEntry{}, s.logs...)
 }
 
+func (s *Store) ClearLogs() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.logs = nil
+	_ = s.persistLocked()
+}
+
 func (s *Store) Audit() []model.AuditLog {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -1528,13 +1535,14 @@ func (s *Store) Heartbeat(req model.TerminalHeartbeatRequest) (model.Device, err
 	device.HardwareModel = firstNonEmpty(req.HardwareModel, device.HardwareModel)
 	newICCID := strings.TrimSpace(req.ICCID)
 	if newICCID != "" && newICCID != device.ICCID {
-		// 换卡：清空旧卡信息，等待终端查询并上报新卡号码/运营商
+		// A new profile invalidates the old operator and phone number. The terminal
+		// may need several network-registration cycles before CNUM is available.
 		device.ICCID = newICCID
-		device.Operator = ""
-		device.PhoneNumber = ""
+		device.Operator = strings.TrimSpace(req.Operator)
+		device.PhoneNumber = strings.TrimSpace(req.PhoneNumber)
 	} else {
-		// 终端启动初期或 eUICC 慢查询期间，心跳可能暂不携带号码/运营商，
-		// 空值保留旧数据，避免覆盖为空白（终端就绪后会推送新值覆盖）。
+		// Terminal startup can temporarily omit identity fields. Keep known values
+		// unless the heartbeat explicitly belongs to a newly detected ICCID.
 		device.ICCID = firstNonEmpty(newICCID, device.ICCID)
 		device.Operator = firstNonEmpty(strings.TrimSpace(req.Operator), device.Operator)
 		device.PhoneNumber = firstNonEmpty(strings.TrimSpace(req.PhoneNumber), device.PhoneNumber)

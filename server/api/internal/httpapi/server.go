@@ -85,6 +85,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("PUT /api/admin/esim/subscriptions/{id}", s.updateEsimSubscription)
 	mux.HandleFunc("DELETE /api/admin/esim/subscriptions/{id}", s.deleteEsimSubscription)
 	mux.HandleFunc("GET /api/admin/logs", s.logs)
+	mux.HandleFunc("DELETE /api/admin/logs", s.clearLogs)
 	mux.HandleFunc("GET /api/admin/audit", s.audit)
 
 	webDir := strings.TrimSpace(os.Getenv("SMS_HUB_WEB_DIR"))
@@ -594,6 +595,11 @@ func (s *Server) deleteEsimSubscription(w http.ResponseWriter, r *http.Request) 
 
 func (s *Server) logs(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, model.APIResponse{Success: true, Data: s.store.Logs()})
+}
+
+func (s *Server) clearLogs(w http.ResponseWriter, r *http.Request) {
+	s.store.ClearLogs()
+	writeJSON(w, http.StatusOK, model.APIResponse{Success: true, Data: map[string]string{"status": "cleared"}})
 }
 
 func (s *Server) audit(w http.ResponseWriter, r *http.Request) {
