@@ -571,7 +571,7 @@ static bool executeCommand(const String& type, JsonVariantConst payload, String&
   }
   if (type == "modem_hardreset") {
     bool ok = resetModule();
-    result = ok ? "modem hard reset complete" : "modem hard reset complete but initialization timed out";
+    result = ok ? "modem hard reset complete; network registration may still be in progress" : "modem hard reset failed: modem initialization failed";
     return ok;
   }
   if (type == "modem_airplane_toggle") {

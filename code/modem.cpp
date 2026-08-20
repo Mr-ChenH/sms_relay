@@ -158,8 +158,10 @@ bool modemInit() {
   }
 
   logCaptureLn(String("网络注册超时，终端控制链路继续运行"));
-  modemReady = false;
-  return false;
+  // AT and SMS initialization succeeded. Registration may take longer for a
+  // newly switched profile; keep the modem usable and let the main loop retry.
+  modemReady = true;
+  return true;
 }
 
 void blink_short(unsigned long gap_time) {
