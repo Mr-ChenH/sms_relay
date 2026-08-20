@@ -637,19 +637,22 @@ func firstNonEmpty(values ...string) string {
 }
 
 func inferredBaseURL(r *http.Request) string {
-	host := requestHost(r)
+	hostPort := requestHostPort(r)
+	if _, _, err := net.SplitHostPort(hostPort); err != nil && strings.Count(hostPort, ":") == 0 {
+		hostPort += ":8080"
+	}
 	scheme := "http"
 	if r.TLS != nil || strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https") {
 		scheme = "https"
 	}
-	return scheme + "://" + host + ":8080"
+	return scheme + "://" + hostPort
 }
 
 func inferredMQTTBroker(r *http.Request) string {
 	return "mqtt://" + requestHost(r) + ":1883"
 }
 
-func requestHost(r *http.Request) string {
+func requestHostPort(r *http.Request) string {
 	host := strings.TrimSpace(r.Header.Get("X-Forwarded-Host"))
 	if host == "" {
 		host = r.Host
@@ -657,6 +660,11 @@ func requestHost(r *http.Request) string {
 	if strings.Contains(host, ",") {
 		host = strings.TrimSpace(strings.Split(host, ",")[0])
 	}
+	return strings.TrimSpace(host)
+}
+
+func requestHost(r *http.Request) string {
+	host := requestHostPort(r)
 	if h, _, err := net.SplitHostPort(host); err == nil {
 		host = h
 	} else if strings.Count(host, ":") == 0 {

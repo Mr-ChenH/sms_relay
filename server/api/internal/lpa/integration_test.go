@@ -40,14 +40,16 @@ func (f *failingTransport) Exchange(_ context.Context, _ string, _ APDURequest) 
 }
 
 type fakeUpdater struct {
-	mu      sync.Mutex
-	updates []string
-	done    chan struct{}
+	mu         sync.Mutex
+	updates    []string
+	progresses []int
+	done       chan struct{}
 }
 
-func (f *fakeUpdater) UpdateEsimTask(_ string, status, stage string, _ int) error {
+func (f *fakeUpdater) UpdateEsimTask(_ string, status, stage string, progress int) error {
 	f.mu.Lock()
 	f.updates = append(f.updates, status+":"+stage)
+	f.progresses = append(f.progresses, progress)
 	f.mu.Unlock()
 	if status == "succeeded" || status == "failed" {
 		select {
@@ -99,6 +101,42 @@ exit 255
 	got := updater.updates[len(updater.updates)-1]
 	if got != "failed:下载失败：es9p_authenticate_client：MatchingID is refused" {
 		t.Fatalf("unexpected final update: %s; all=%v", got, updater.updates)
+	}
+	if progress := updater.progresses[len(updater.progresses)-1]; progress != 2 {
+		t.Fatalf("final progress = %d, want 2", progress)
+	}
+}
+
+func TestRunnerPreservesProgressOnAuthenticationFailure(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("test fixture uses a POSIX shell script")
+	}
+	script := filepath.Join(t.TempDir(), "fake-lpac")
+	contents := `#!/bin/sh
+printf '%s\n' '{"type":"progress","payload":{"code":0,"message":"es9p_authenticate_client"}}'
+printf '%s\n' '{"type":"progress","payload":{"code":0,"message":"es10b_cancel_session"}}'
+printf '%s\n' '{"type":"lpa","payload":{"code":-1,"message":"es9p_authenticate_client","data":"Not allowed"}}'
+exit 1
+`
+	if err := os.WriteFile(script, []byte(contents), 0700); err != nil {
+		t.Fatal(err)
+	}
+	updater := &fakeUpdater{done: make(chan struct{})}
+	runner := NewRunner(&fakeTransport{}, updater)
+	runner.binary = script
+	runner.timeout = 5 * time.Second
+	if err := runner.Start("task-1", "device-1", "LPA:1$example$matching", ""); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-updater.done:
+	case <-time.After(6 * time.Second):
+		t.Fatal("runner did not finish")
+	}
+	updater.mu.Lock()
+	defer updater.mu.Unlock()
+	if progress := updater.progresses[len(updater.progresses)-1]; progress != 42 {
+		t.Fatalf("final progress = %d, want 42; all=%v", progress, updater.progresses)
 	}
 }
 

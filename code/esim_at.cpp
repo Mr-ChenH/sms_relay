@@ -105,6 +105,40 @@ bool esimParseATPayload(const String& response, const char* prefix, String* payl
   return payload->length() > 0;
 }
 
+static bool parseChannelText(String value, int* channel) {
+  value.trim();
+  if (value.length() >= 2 && value[0] == '"' && value[value.length() - 1] == '"') {
+    value = value.substring(1, value.length() - 1);
+  }
+  if (value.length() == 0) return false;
+  for (int i = 0; i < value.length(); i++) {
+    if (!isdigit((unsigned char)value.charAt(i))) return false;
+  }
+  int id = value.toInt();
+  if (id <= 0 || id > 19) return false;
+  if (channel) *channel = id;
+  return true;
+}
+
+bool esimParseChannelResponse(const String& response, int* channel) {
+  String payload;
+  if (esimParseRequiredATPayload(response, "+CCHO:", &payload) && parseChannelText(payload, channel)) return true;
+
+  // ML307 firmware variants may return the channel as a bare numeric line
+  // (for example "3\r\nOK") instead of using the +CCHO prefix.
+  int start = 0;
+  while (start <= response.length()) {
+    int end = response.indexOf('\n', start);
+    if (end < 0) end = response.length();
+    String line = response.substring(start, end);
+    line.replace("\r", "");
+    if (parseChannelText(line, channel)) return true;
+    if (end == response.length()) break;
+    start = end + 1;
+  }
+  return false;
+}
+
 bool esimParseCGLAHexPayload(const String& response, String* hex) {
   if (!hex) return false;
   int index = response.indexOf("+CGLA:");

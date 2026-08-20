@@ -152,18 +152,18 @@ func (r *Runner) run(taskID, deviceID, activationCode, confirmationCode string) 
 	})
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
-		r.fail(taskID, err)
+		r.fail(taskID, err, 2)
 		return
 	}
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
-		r.fail(taskID, err)
+		r.fail(taskID, err, 2)
 		return
 	}
 	var stderr strings.Builder
 	cmd.Stderr = &stderr
 	if err := cmd.Start(); err != nil {
-		r.fail(taskID, err)
+		r.fail(taskID, err, 2)
 		return
 	}
 
@@ -216,11 +216,11 @@ func (r *Runner) run(taskID, deviceID, activationCode, confirmationCode string) 
 	_ = stdin.Close()
 	waitErr := cmd.Wait()
 	if ctx.Err() != nil {
-		r.fail(taskID, fmt.Errorf("LPA download timed out: %w", ctx.Err()))
+		r.fail(taskID, fmt.Errorf("LPA download timed out: %w", ctx.Err()), lastProgress)
 		return
 	}
 	if scanErr := scanner.Err(); scanErr != nil {
-		r.fail(taskID, scanErr)
+		r.fail(taskID, scanErr, lastProgress)
 		return
 	}
 	if waitErr != nil || finalCode != 0 {
@@ -252,7 +252,7 @@ func (r *Runner) run(taskID, deviceID, activationCode, confirmationCode string) 
 		if waitErr != nil && !pipeFailed && finalMessage == "lpac exited without a final result" {
 			detail = fmt.Sprintf("%s: %v", detail, waitErr)
 		}
-		r.fail(taskID, errors.New(detail))
+		r.fail(taskID, errors.New(detail), lastProgress)
 		return
 	}
 	_ = r.updater.UpdateEsimTask(taskID, "succeeded", "Profile 下载并安装完成", 100)
@@ -287,12 +287,17 @@ func writeAPDUResponse(w io.Writer, response APDUResponse) error {
 	return err
 }
 
-func (r *Runner) fail(taskID string, err error) {
+func (r *Runner) fail(taskID string, err error, progress int) {
 	message := strings.TrimSpace(err.Error())
 	if len(message) > 300 {
 		message = message[:300]
 	}
-	_ = r.updater.UpdateEsimTask(taskID, "failed", "下载失败："+message, 0)
+	if progress < 0 {
+		progress = 0
+	} else if progress > 100 {
+		progress = 100
+	}
+	_ = r.updater.UpdateEsimTask(taskID, "failed", "下载失败："+message, progress)
 }
 
 func environmentWithOverrides(base []string, overrides map[string]string) []string {

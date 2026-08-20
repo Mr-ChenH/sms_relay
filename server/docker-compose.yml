@@ -4,11 +4,11 @@ services:
     restart: unless-stopped
     environment:
       TZ: "${TZ:-Asia/Shanghai}"
-      SMS_HUB_PUBLIC_BASE_URL: "${SMS_HUB_PUBLIC_BASE_URL:-http://172.16.0.9:8082}"
-      SMS_HUB_PUBLIC_MQTT_BROKER: "${SMS_HUB_PUBLIC_MQTT_BROKER:-mqtt://172.16.0.9:1883}"
+      SMS_HUB_PUBLIC_BASE_URL: "${SMS_HUB_PUBLIC_BASE_URL:-}"
+      SMS_HUB_PUBLIC_MQTT_BROKER: "${SMS_HUB_PUBLIC_MQTT_BROKER:-}"
       SMS_HUB_FIRMWARE_DIR: /data/firmware
     ports:
-      - "${SMS_HUB_HTTP_PORT:-8082}:8080"
+      - "${SMS_HUB_HTTP_PORT:-8080}:8080"
       - "1883:1883"
     volumes:
       - ./data:/data

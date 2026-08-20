@@ -721,22 +721,13 @@ static void handleApduPayload(const String& payloadText) {
       response["error"] = "invalid AID";
     } else {
       String atResponse;
-      String channelText;
       for (int attempt = 0; attempt < 2; attempt++) {
         atResponse = esimSendAT((String("AT+CCHO=\"") + param + "\"").c_str(), 10000);
-        channelText = "";
-        if (esimParseRequiredATPayload(atResponse, "+CCHO:", &channelText)) {
-          channelText.trim();
-          bool digits = channelText.length() > 0;
-          for (int i = 0; i < channelText.length(); i++) {
-            if (!isdigit((unsigned char)channelText.charAt(i))) digits = false;
-          }
-          int channel = digits ? channelText.toInt() : 0;
-          if (channel > 0 && channel <= 19) {
-            apduLogicalChannel = channel;
-            response["ecode"] = channel;
-            break;
-          }
+        int channel = 0;
+        if (esimParseChannelResponse(atResponse, &channel)) {
+          apduLogicalChannel = channel;
+          response["ecode"] = channel;
+          break;
         }
         if (attempt == 0) {
           if (apduLogicalChannel > 0) esimSendAT((String("AT+CCHC=") + apduLogicalChannel).c_str(), 5000);

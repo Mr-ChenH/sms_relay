@@ -9,31 +9,15 @@ static const uint8_t ISD_R_AID[] = {
   0xFF, 0xFF, 0xFF, 0x89, 0x00, 0x00, 0x01, 0x00
 };
 
-static bool validChannelText(const String& value) {
-  if (value.length() == 0) return false;
-  for (int i = 0; i < value.length(); i++) {
-    if (!isdigit((unsigned char)value.charAt(i))) return false;
-  }
-  int id = value.toInt();
-  return id > 0 && id <= 19;
-}
-
 static bool openChannel(String* channel) {
   String aid = esimBytesToHex(ISD_R_AID, sizeof(ISD_R_AID));
   String response;
-  String payload;
   for (int attempt = 0; attempt < 2; attempt++) {
     response = esimSendAT((String("AT+CCHO=\"") + aid + "\"").c_str(), 10000);
-    payload = "";
-    if (esimParseRequiredATPayload(response, "+CCHO:", &payload)) {
-      payload.trim();
-      if (payload.length() >= 2 && payload[0] == '"' && payload[payload.length() - 1] == '"') {
-        payload = payload.substring(1, payload.length() - 1);
-      }
-      if (validChannelText(payload)) {
-        *channel = payload;
-        return true;
-      }
+    int id = 0;
+    if (esimParseChannelResponse(response, &id)) {
+      *channel = String(id);
+      return true;
     }
     if (attempt == 0) {
       // Some cards answer after modem-ready URCs or leave a stale logical
