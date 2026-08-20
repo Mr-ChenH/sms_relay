@@ -53,6 +53,22 @@ func TestReplaceTerminalEsimProfilesMovesProfileAndSubscription(t *testing.T) {
 	}
 }
 
+func TestReplaceTerminalEsimProfilesUsesHeartbeatICCIDAsActiveState(t *testing.T) {
+	s := newEsimTaskTestStore(t)
+	s.devices = []model.Device{{ID: "dev-1", DeviceID: "terminal-1", Name: "Terminal 1", ICCID: "8931083924053625066F"}}
+
+	profiles, err := s.ReplaceTerminalEsimProfiles(model.TerminalEsimProfilesRequest{DeviceID: "terminal-1", Profiles: []model.TerminalEsimProfileInput{
+		{ICCID: "8931083924053625066", State: "disabled"},
+		{ICCID: "89636626000100558682", State: "disabled"},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if profiles[0].State != "enabled" || profiles[1].State != "disabled" {
+		t.Fatalf("profile states = %q/%q, want enabled/disabled", profiles[0].State, profiles[1].State)
+	}
+}
+
 func TestDueEsimSubscriptionsSkipsMissingProfile(t *testing.T) {
 	s := newEsimTaskTestStore(t)
 	s.esimSubscriptions = []model.EsimSubscription{{ID: "sub-1", Enabled: true, Status: "profile_missing", NextRunAt: time.Now().Add(-time.Hour), IntervalDays: 30}}

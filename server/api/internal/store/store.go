@@ -818,6 +818,15 @@ func (s *Store) ReplaceTerminalEsimProfiles(req model.TerminalEsimProfilesReques
 			profile.MissingSince = now
 		}
 	}
+	// The modem can briefly report every profile as disabled after a switch.
+	// Heartbeat ICCID represents the active SIM identity and is authoritative.
+	s.updateEnabledProfileLocked(device)
+	profiles = profiles[:0]
+	for _, profile := range s.esimProfiles {
+		if profile.DeviceID == device.ID && seen[profile.ID] {
+			profiles = append(profiles, profile)
+		}
+	}
 	for i := range s.esimSubscriptions {
 		sub := &s.esimSubscriptions[i]
 		profile, found := s.findEsimProfileLocked(sub.ProfileID)
@@ -1714,17 +1723,18 @@ func (s *Store) notifyCommandCreatedLocked(command model.DeviceCommand, device m
 }
 
 func (s *Store) updateEnabledProfileLocked(device model.Device) bool {
-	if device.ICCID == "" {
+	currentICCID := normalizeICCID(device.ICCID)
+	if currentICCID == "" {
 		return false
 	}
 	changed := false
 	for i := range s.esimProfiles {
 		profile := &s.esimProfiles[i]
-		if profile.DeviceID != device.ID {
+		if profile.DeviceID != device.ID || !profile.Available {
 			continue
 		}
 		state := "disabled"
-		if profile.ICCID == device.ICCID {
+		if normalizeICCID(profile.ICCID) == currentICCID {
 			state = "enabled"
 		}
 		if profile.State != state {
@@ -1746,7 +1756,7 @@ func (s *Store) reconcileProfileCommandsLocked(device model.Device, now time.Tim
 			continue
 		}
 		target, _ := cmd.Payload["iccid"].(string)
-		if strings.TrimSpace(target) == device.ICCID {
+		if normalizeICCID(target) == normalizeICCID(device.ICCID) {
 			cmd.Status = "succeeded"
 			cmd.Result = "profile enabled and verified by heartbeat"
 			cmd.CompletedAt = &now
@@ -1971,6 +1981,14 @@ func profileSubscriptionStatus(profile model.EsimProfile, enabled bool) string {
 		return "profile_missing"
 	}
 	return "scheduled"
+}
+
+func normalizeICCID(value string) string {
+	value = strings.ToUpper(strings.TrimSpace(value))
+	if len(value)%2 == 0 && strings.HasSuffix(value, "F") {
+		value = strings.TrimSuffix(value, "F")
+	}
+	return value
 }
 
 func normalizeProfileState(value string) string {
