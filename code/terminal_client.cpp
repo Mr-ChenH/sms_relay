@@ -60,7 +60,6 @@ static int lastMqttState = 0;
 static String terminalDeviceID();
 
 static String cachedICCID;
-static String cachedIdentityICCID;
 static String cachedEID;
 static ESimInfo cachedEsimInfo = {};
 static String cachedOperator;
@@ -222,12 +221,12 @@ static void refreshIdentityCache(bool force = false) {
     cachedPhoneNumber = "";
     cachedOperator = "";
   }
-  cachedIdentityICCID = cachedICCID;
+  bool settlingIdentity = identitySettleUntil > 0 && (long)(identitySettleUntil - now) > 0;
   cachedOperator = parseOperatorName(sendATCommand("AT+COPS?", 5000));
   String queriedPhoneNumber = parsePhoneNumber(sendATCommand("AT+CNUM", 3000));
-  if (queriedPhoneNumber.length() > 0 && !identityChanged) {
+  if (queriedPhoneNumber.length() > 0 && !identityChanged && !settlingIdentity) {
     cachedPhoneNumber = queriedPhoneNumber;
-  } else if (identityChanged) {
+  } else if (identityChanged || settlingIdentity) {
     cachedPhoneNumber = "";
   }
   cachedCellularCSQ = parseCSQ(sendATCommand("AT+CSQ", 3000));
@@ -300,7 +299,6 @@ static void terminalHeartbeat(bool refreshIdentity = true) {
 
 void terminalClientIdentityReady() {
   cachedICCID = "";
-  cachedIdentityICCID = "";
   cachedEID = "";
   cachedOperator = "";
   cachedPhoneNumber = "";
@@ -316,8 +314,10 @@ void terminalClientIdentityReady() {
 
 static void refreshIdentityAfterProfileChange() {
   cachedICCID = "";
-  cachedIdentityICCID = "";
   cachedEID = "";
+  cachedOperator = "";
+  cachedPhoneNumber = "";
+  lastIdentityRefreshAt = 0;
   identitySettleUntil = millis() + IDENTITY_SETTLE_WINDOW_MS;
   refreshIdentityCache(true);
   terminalHeartbeat(false);

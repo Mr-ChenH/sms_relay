@@ -748,6 +748,10 @@ func (s *Store) UpdateEsimProfile(id string, req model.UpdateEsimProfileRequest)
 		profile := &s.esimProfiles[i]
 		profile.Country = strings.TrimSpace(req.Country)
 		profile.PhoneNumber = strings.TrimSpace(req.PhoneNumber)
+		if device, found := s.findDeviceLocked(profile.DeviceID); found {
+			s.applyProfilePhoneNumberLocked(&device)
+			s.upsertDeviceLocked(device)
+		}
 		for j := range s.esimSubscriptions {
 			if s.esimSubscriptions[j].ProfileID == profile.ID {
 				s.esimSubscriptions[j].Country = profile.Country
@@ -821,6 +825,9 @@ func (s *Store) ReplaceTerminalEsimProfiles(req model.TerminalEsimProfilesReques
 	// The modem can briefly report every profile as disabled after a switch.
 	// Heartbeat ICCID represents the active SIM identity and is authoritative.
 	s.updateEnabledProfileLocked(device)
+	if s.applyProfilePhoneNumberLocked(&device) {
+		s.upsertDeviceLocked(device)
+	}
 	profiles = profiles[:0]
 	for _, profile := range s.esimProfiles {
 		if profile.DeviceID == device.ID && seen[profile.ID] {
@@ -1598,6 +1605,7 @@ func (s *Store) Heartbeat(req model.TerminalHeartbeatRequest) (model.Device, err
 	device.CellularCSQ = req.CellularCSQ
 	device.FreeHeapKB = req.FreeHeapKB
 	device.Uptime = firstNonEmpty(req.Uptime, device.Uptime)
+	s.applyProfilePhoneNumberLocked(&device)
 	s.upsertDeviceLocked(device)
 	if wasOffline {
 		s.appendDeviceStatusLogLocked(device, "online", now)
@@ -1740,6 +1748,24 @@ func (s *Store) notifyCommandCreatedLocked(command model.DeviceCommand, device m
 	}
 	hook := s.onCommandCreated
 	go hook(command, device)
+}
+
+func (s *Store) applyProfilePhoneNumberLocked(device *model.Device) bool {
+	if device == nil || normalizeICCID(device.ICCID) == "" {
+		return false
+	}
+	for _, profile := range s.esimProfiles {
+		if profile.DeviceID != device.ID || !profile.Available || normalizeICCID(profile.ICCID) != normalizeICCID(device.ICCID) {
+			continue
+		}
+		phone := strings.TrimSpace(profile.PhoneNumber)
+		if device.PhoneNumber == phone {
+			return false
+		}
+		device.PhoneNumber = phone
+		return true
+	}
+	return false
 }
 
 func (s *Store) updateEnabledProfileLocked(device model.Device) bool {

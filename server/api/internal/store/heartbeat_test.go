@@ -105,6 +105,32 @@ func TestHeartbeatClearsOldPhoneWhenNewProfileHasNoNumber(t *testing.T) {
 	}
 }
 
+func TestHeartbeatUsesCurrentProfilePhoneMetadata(t *testing.T) {
+	s := &Store{
+		devices: []model.Device{{ID: "dev-1", DeviceID: "esp32-test", ICCID: "old-iccid", PhoneNumber: "old-number"}},
+		esimProfiles: []model.EsimProfile{
+			{ID: "profile-empty", DeviceID: "dev-1", ICCID: "new-empty", PhoneNumber: "", Available: true},
+			{ID: "profile-known", DeviceID: "dev-1", ICCID: "new-known", PhoneNumber: "+311234", Available: true},
+		},
+	}
+
+	device, err := s.Heartbeat(model.TerminalHeartbeatRequest{DeviceID: "esp32-test", ICCID: "new-empty", PhoneNumber: "old-number"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if device.PhoneNumber != "" {
+		t.Fatalf("empty profile phone retained modem value %q", device.PhoneNumber)
+	}
+
+	device, err = s.Heartbeat(model.TerminalHeartbeatRequest{DeviceID: "esp32-test", ICCID: "new-known", PhoneNumber: "stale-number"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if device.PhoneNumber != "+311234" {
+		t.Fatalf("known profile phone = %q, want +311234", device.PhoneNumber)
+	}
+}
+
 func TestHeartbeatKeepsIdentityFieldsWhenNotYetReported(t *testing.T) {
 	s := &Store{devices: []model.Device{{ID: "dev-1", DeviceID: "esp32-test", ICCID: "same-iccid", Operator: "known-operator", PhoneNumber: "known-number"}}}
 	device, err := s.Heartbeat(model.TerminalHeartbeatRequest{DeviceID: "esp32-test", ICCID: "same-iccid"})
