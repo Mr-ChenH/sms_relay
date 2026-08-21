@@ -980,7 +980,7 @@ func (s *Store) CreateEsimSubscription(req model.CreateEsimSubscriptionRequest) 
 		KeepaliveNumber:  strings.TrimSpace(req.KeepaliveNumber),
 		KeepaliveMessage: firstNonEmpty(req.KeepaliveMessage, "keepalive"),
 		TargetIDs:        targetIDs,
-		NextRunAt:        startAt,
+		NextRunAt:        initialSubscriptionRun(startAt, intervalDays, now),
 		Status:           profileSubscriptionStatus(profile, req.Enabled),
 		Note:             strings.TrimSpace(req.Note),
 		UpdatedAt:        now,
@@ -1014,7 +1014,7 @@ func (s *Store) UpdateEsimSubscription(id string, req model.UpdateEsimSubscripti
 			sub.KeepaliveNumber = strings.TrimSpace(req.KeepaliveNumber)
 			sub.KeepaliveMessage = firstNonEmpty(req.KeepaliveMessage, "keepalive")
 			sub.TargetIDs = targetIDs
-			sub.NextRunAt = sub.StartAt
+			sub.NextRunAt = initialSubscriptionRun(sub.StartAt, sub.IntervalDays, now)
 			sub.Status = "scheduled"
 			if !sub.Enabled {
 				sub.Status = "disabled"
@@ -1035,11 +1035,6 @@ func (s *Store) DeleteEsimSubscription(id string) error {
 	defer s.mu.Unlock()
 	defer s.persistLocked()
 
-	for _, run := range s.keepaliveRuns {
-		if run.SubscriptionID == id && run.Stage != "completed" && run.Stage != "failed" {
-			return errors.New("subscription has an active keepalive run")
-		}
-	}
 	for i, sub := range s.esimSubscriptions {
 		if sub.ID != id {
 			continue
@@ -1293,6 +1288,13 @@ func (s *Store) CompleteEsimSubscriptionReminder(id string, sent bool) {
 		_ = s.persistLocked()
 		return
 	}
+}
+
+func initialSubscriptionRun(start time.Time, intervalDays int, now time.Time) time.Time {
+	if start.After(now) {
+		return start
+	}
+	return nextSubscriptionRun(start, intervalDays, now)
 }
 
 func nextSubscriptionRun(current time.Time, intervalDays int, now time.Time) time.Time {

@@ -25,15 +25,18 @@ func TestDeleteEsimSubscriptionKeepsCompletedRuns(t *testing.T) {
 	}
 }
 
-func TestDeleteEsimSubscriptionRejectsActiveRun(t *testing.T) {
+func TestDeleteEsimSubscriptionKeepsActiveRunHistory(t *testing.T) {
 	s := newEsimTaskTestStore(t)
 	s.esimSubscriptions = []model.EsimSubscription{{ID: "sub-1"}}
 	s.keepaliveRuns = []model.EsimKeepaliveRun{{ID: "run-1", SubscriptionID: "sub-1", Stage: "sending_sms"}}
 
-	if err := s.DeleteEsimSubscription("sub-1"); err == nil {
-		t.Fatal("expected active run to block deletion")
+	if err := s.DeleteEsimSubscription("sub-1"); err != nil {
+		t.Fatal(err)
 	}
-	if len(s.esimSubscriptions) != 1 {
-		t.Fatal("blocked subscription should remain")
+	if len(s.esimSubscriptions) != 0 {
+		t.Fatal("subscription should be deleted")
+	}
+	if len(s.keepaliveRuns) != 1 || s.keepaliveRuns[0].Stage != "sending_sms" {
+		t.Fatalf("active run history should be retained: %+v", s.keepaliveRuns)
 	}
 }

@@ -7,6 +7,22 @@ import (
 	"sms-forwarding/server/api/internal/model"
 )
 
+func TestInitialSubscriptionRunDoesNotBackfillPastStart(t *testing.T) {
+	now := time.Date(2026, time.August, 21, 9, 30, 0, 0, time.UTC)
+	past := time.Date(2026, time.August, 8, 9, 30, 0, 0, time.UTC)
+	future := now.Add(48 * time.Hour)
+
+	if got, want := initialSubscriptionRun(past, 180, now), past.Add(180*24*time.Hour); !got.Equal(want) {
+		t.Fatalf("past start next run = %s, want %s", got, want)
+	}
+	if got := initialSubscriptionRun(future, 180, now); !got.Equal(future) {
+		t.Fatalf("future start next run = %s, want %s", got, future)
+	}
+	if got, want := initialSubscriptionRun(now, 30, now), now.Add(30*24*time.Hour); !got.Equal(want) {
+		t.Fatalf("current start next run = %s, want %s", got, want)
+	}
+}
+
 func TestNextSubscriptionRun(t *testing.T) {
 	start := time.Date(2026, time.August, 1, 9, 30, 0, 0, time.UTC)
 	tests := []struct {
@@ -24,6 +40,26 @@ func TestNextSubscriptionRun(t *testing.T) {
 				t.Fatalf("nextSubscriptionRun() = %s, want %s", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestCreateSubscriptionSchedulesPastStartInFuture(t *testing.T) {
+	now := time.Now()
+	s := &Store{
+		devices:        []model.Device{{ID: "dev-1", Name: "terminal"}},
+		esimProfiles:   []model.EsimProfile{{ID: "profile-1", DeviceID: "dev-1", ICCID: "8901", Available: true}},
+		appriseTargets: []model.AppriseTarget{{ID: "target-1", Enabled: true}},
+	}
+	start := now.Add(-48 * time.Hour)
+	sub, err := s.CreateEsimSubscription(model.CreateEsimSubscriptionRequest{
+		ProfileID: "profile-1", Enabled: true, Type: "sms_keepalive", IntervalDays: 30,
+		StartAt: start, KeepaliveNumber: "10086", KeepaliveMessage: "CXLL", TargetIDs: []string{"target-1"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !sub.NextRunAt.After(now) || !sub.NextRunAt.Equal(start.Add(30*24*time.Hour)) {
+		t.Fatalf("NextRunAt = %s, want %s", sub.NextRunAt, start.Add(30*24*time.Hour))
 	}
 }
 
