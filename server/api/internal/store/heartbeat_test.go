@@ -131,6 +131,68 @@ func TestHeartbeatUsesCurrentProfilePhoneMetadata(t *testing.T) {
 	}
 }
 
+func TestHeartbeatStoresDetectedPhoneWithoutTrustingIt(t *testing.T) {
+	s := &Store{
+		devices: []model.Device{{ID: "dev-1", DeviceID: "esp32-test", ICCID: "profile-a"}},
+		esimProfiles: []model.EsimProfile{
+			{ID: "a", DeviceID: "dev-1", ICCID: "profile-a", Available: true},
+			{ID: "b", DeviceID: "dev-1", ICCID: "profile-b", PhoneNumber: "+63991", Available: true},
+		},
+	}
+
+	device, err := s.Heartbeat(model.TerminalHeartbeatRequest{DeviceID: "esp32-test", ICCID: "profile-a", DetectedPhoneNumber: "+63991"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if device.PhoneNumber != "" || s.esimProfiles[0].PhoneNumberSource != "stale_modem_cache" || s.esimProfiles[0].PhoneNumberConflict == "" {
+		t.Fatalf("stale candidate was not rejected: device=%+v profile=%+v", device, s.esimProfiles[0])
+	}
+
+	s.esimProfiles[0].PhoneNumber = "+31123"
+	device, err = s.Heartbeat(model.TerminalHeartbeatRequest{DeviceID: "esp32-test", ICCID: "profile-a", DetectedPhoneNumber: "+31123"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if device.PhoneNumber != "+31123" || s.esimProfiles[0].PhoneNumberSource != "verified" || s.esimProfiles[0].PhoneNumberConflict != "" {
+		t.Fatalf("matching candidate was not verified: device=%+v profile=%+v", device, s.esimProfiles[0])
+	}
+}
+
+func TestDetectedPhoneAutoPromotesAfterStableObservations(t *testing.T) {
+	s := &Store{
+		devices:      []model.Device{{ID: "dev-1", DeviceID: "esp32-test", ICCID: "profile-a"}},
+		esimProfiles: []model.EsimProfile{{ID: "a", DeviceID: "dev-1", ICCID: "profile-a", Available: true}},
+	}
+	device := s.devices[0]
+	start := time.Date(2026, time.August, 28, 12, 0, 0, 0, time.UTC)
+
+	s.updateDetectedProfilePhoneAtLocked(device, "+19447927461388", start)
+	s.updateDetectedProfilePhoneAtLocked(device, "+19447927461388", start.Add(15*time.Second))
+	if profile := s.esimProfiles[0]; profile.PhoneNumber != "" || profile.DetectedPhoneCount != 2 {
+		t.Fatalf("candidate promoted too early: %+v", profile)
+	}
+	s.updateDetectedProfilePhoneAtLocked(device, "+19447927461388", start.Add(31*time.Second))
+	profile := s.esimProfiles[0]
+	if profile.PhoneNumber != "+19447927461388" || profile.PhoneNumberSource != "cnum_stable" || profile.DetectedPhoneCount != 3 {
+		t.Fatalf("stable candidate was not promoted: %+v", profile)
+	}
+}
+
+func TestDetectedPhoneChangeRestartsStabilityWindow(t *testing.T) {
+	s := &Store{
+		devices:      []model.Device{{ID: "dev-1", DeviceID: "esp32-test", ICCID: "profile-a"}},
+		esimProfiles: []model.EsimProfile{{ID: "a", DeviceID: "dev-1", ICCID: "profile-a", Available: true}},
+	}
+	device := s.devices[0]
+	start := time.Date(2026, time.August, 28, 12, 0, 0, 0, time.UTC)
+	s.updateDetectedProfilePhoneAtLocked(device, "+old", start)
+	s.updateDetectedProfilePhoneAtLocked(device, "+new", start.Add(31*time.Second))
+	profile := s.esimProfiles[0]
+	if profile.PhoneNumber != "" || profile.DetectedPhoneNumber != "+new" || profile.DetectedPhoneCount != 1 || !profile.DetectedPhoneFirstSeenAt.Equal(start.Add(31*time.Second)) {
+		t.Fatalf("changed candidate did not restart window: %+v", profile)
+	}
+}
+
 func TestHeartbeatKeepsIdentityFieldsWhenNotYetReported(t *testing.T) {
 	s := &Store{devices: []model.Device{{ID: "dev-1", DeviceID: "esp32-test", ICCID: "same-iccid", Operator: "known-operator", PhoneNumber: "known-number"}}}
 	device, err := s.Heartbeat(model.TerminalHeartbeatRequest{DeviceID: "esp32-test", ICCID: "same-iccid"})

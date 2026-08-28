@@ -135,19 +135,25 @@ type CreateRoutingRuleRequest struct {
 type UpdateRoutingRuleRequest = CreateRoutingRuleRequest
 
 type EsimProfile struct {
-	ID           string    `json:"id"`
-	DeviceID     string    `json:"deviceId"`
-	ICCID        string    `json:"iccid"`
-	AID          string    `json:"aid"`
-	Nickname     string    `json:"nickname"`
-	Provider     string    `json:"provider"`
-	Country      string    `json:"country"`
-	PhoneNumber  string    `json:"phoneNumber"`
-	ProfileName  string    `json:"profileName"`
-	State        string    `json:"state"`
-	Available    bool      `json:"available"`
-	MissingSince time.Time `json:"missingSince,omitempty"`
-	LastSeenAt   time.Time `json:"lastSeenAt"`
+	ID                       string    `json:"id"`
+	DeviceID                 string    `json:"deviceId"`
+	ICCID                    string    `json:"iccid"`
+	AID                      string    `json:"aid"`
+	Nickname                 string    `json:"nickname"`
+	Provider                 string    `json:"provider"`
+	Country                  string    `json:"country"`
+	PhoneNumber              string    `json:"phoneNumber"`
+	DetectedPhoneNumber      string    `json:"detectedPhoneNumber"`
+	DetectedPhoneCount       int       `json:"detectedPhoneCount"`
+	DetectedPhoneFirstSeenAt time.Time `json:"detectedPhoneFirstSeenAt,omitempty"`
+	DetectedPhoneLastSeenAt  time.Time `json:"detectedPhoneLastSeenAt,omitempty"`
+	PhoneNumberSource        string    `json:"phoneNumberSource"`
+	PhoneNumberConflict      string    `json:"phoneNumberConflict"`
+	ProfileName              string    `json:"profileName"`
+	State                    string    `json:"state"`
+	Available                bool      `json:"available"`
+	MissingSince             time.Time `json:"missingSince,omitempty"`
+	LastSeenAt               time.Time `json:"lastSeenAt"`
 }
 
 type UpdateEsimProfileRequest struct {
@@ -356,6 +362,7 @@ type TerminalHeartbeatRequest struct {
 	EsimFreeVolatileMemory     uint32 `json:"esimFreeVolatileMemory"`
 	Operator                   string `json:"operator"`
 	PhoneNumber                string `json:"phoneNumber"`
+	DetectedPhoneNumber        string `json:"detectedPhoneNumber"`
 	IP                         string `json:"ip"`
 	RSSI                       int    `json:"rssi"`
 	CellularRSSI               int    `json:"cellularRssi"`

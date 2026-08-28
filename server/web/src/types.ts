@@ -156,6 +156,12 @@ export interface EsimProfile {
   provider: string
   country: string
   phoneNumber: string
+  detectedPhoneNumber: string
+  detectedPhoneCount: number
+  detectedPhoneFirstSeenAt?: string
+  detectedPhoneLastSeenAt?: string
+  phoneNumberSource: string
+  phoneNumberConflict: string
   profileName: string
   state: string
   available: boolean

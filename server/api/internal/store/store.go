@@ -748,7 +748,9 @@ func (s *Store) UpdateEsimProfile(id string, req model.UpdateEsimProfileRequest)
 		profile := &s.esimProfiles[i]
 		profile.Country = strings.TrimSpace(req.Country)
 		profile.PhoneNumber = strings.TrimSpace(req.PhoneNumber)
+		profile.PhoneNumberSource = "manual"
 		if device, found := s.findDeviceLocked(profile.DeviceID); found {
+			s.updateDetectedProfilePhoneLocked(device, profile.DetectedPhoneNumber)
 			s.applyProfilePhoneNumberLocked(&device)
 			s.upsertDeviceLocked(device)
 		}
@@ -1605,6 +1607,7 @@ func (s *Store) Heartbeat(req model.TerminalHeartbeatRequest) (model.Device, err
 	device.CellularCSQ = req.CellularCSQ
 	device.FreeHeapKB = req.FreeHeapKB
 	device.Uptime = firstNonEmpty(req.Uptime, device.Uptime)
+	s.updateDetectedProfilePhoneLocked(device, req.DetectedPhoneNumber)
 	s.applyProfilePhoneNumberLocked(&device)
 	s.upsertDeviceLocked(device)
 	if wasOffline {
@@ -1748,6 +1751,85 @@ func (s *Store) notifyCommandCreatedLocked(command model.DeviceCommand, device m
 	}
 	hook := s.onCommandCreated
 	go hook(command, device)
+}
+
+func (s *Store) updateDetectedProfilePhoneLocked(device model.Device, detected string) bool {
+	return s.updateDetectedProfilePhoneAtLocked(device, detected, time.Now())
+}
+
+func (s *Store) updateDetectedProfilePhoneAtLocked(device model.Device, detected string, now time.Time) bool {
+	detected = strings.TrimSpace(detected)
+	currentICCID := normalizeICCID(device.ICCID)
+	if currentICCID == "" {
+		return false
+	}
+	now = now.Round(0)
+	for i := range s.esimProfiles {
+		profile := &s.esimProfiles[i]
+		if profile.DeviceID != device.ID || !profile.Available || normalizeICCID(profile.ICCID) != currentICCID {
+			continue
+		}
+
+		conflict := ""
+		if detected != "" {
+			for _, other := range s.esimProfiles {
+				if other.ID != profile.ID && strings.TrimSpace(other.PhoneNumber) != "" && detected == strings.TrimSpace(other.PhoneNumber) {
+					conflict = "candidate belongs to profile " + other.ICCID
+					break
+				}
+			}
+		}
+
+		if detected == "" || conflict != "" {
+			changed := profile.DetectedPhoneNumber != detected || profile.DetectedPhoneCount != 0 || profile.PhoneNumberConflict != conflict
+			profile.DetectedPhoneNumber = detected
+			profile.DetectedPhoneCount = 0
+			profile.DetectedPhoneFirstSeenAt = time.Time{}
+			profile.DetectedPhoneLastSeenAt = now
+			profile.PhoneNumberConflict = conflict
+			if conflict != "" {
+				if profile.PhoneNumberSource != "manual" {
+					changed = changed || profile.PhoneNumberSource != "stale_modem_cache"
+					profile.PhoneNumberSource = "stale_modem_cache"
+				}
+			} else if profile.PhoneNumber == "" {
+				changed = changed || profile.PhoneNumberSource != ""
+				profile.PhoneNumberSource = ""
+			}
+			return changed
+		}
+
+		if profile.PhoneNumber != "" {
+			changed := profile.DetectedPhoneNumber != detected || profile.PhoneNumberConflict != "" || (detected == strings.TrimSpace(profile.PhoneNumber) && profile.PhoneNumberSource != "verified")
+			profile.DetectedPhoneNumber = detected
+			profile.DetectedPhoneLastSeenAt = now
+			profile.PhoneNumberConflict = ""
+			if detected == strings.TrimSpace(profile.PhoneNumber) && profile.PhoneNumberSource != "manual" {
+				profile.PhoneNumberSource = "verified"
+			}
+			return changed
+		}
+
+		if profile.DetectedPhoneNumber != detected {
+			profile.DetectedPhoneNumber = detected
+			profile.DetectedPhoneCount = 1
+			profile.DetectedPhoneFirstSeenAt = now
+			profile.DetectedPhoneLastSeenAt = now
+			profile.PhoneNumberSource = "cnum_candidate"
+			profile.PhoneNumberConflict = ""
+			return true
+		}
+
+		profile.DetectedPhoneCount++
+		profile.DetectedPhoneLastSeenAt = now
+		if profile.DetectedPhoneCount >= 3 && !profile.DetectedPhoneFirstSeenAt.IsZero() && now.Sub(profile.DetectedPhoneFirstSeenAt) >= 30*time.Second {
+			profile.PhoneNumber = detected
+			profile.PhoneNumberSource = "cnum_stable"
+			profile.PhoneNumberConflict = ""
+		}
+		return true
+	}
+	return false
 }
 
 func (s *Store) applyProfilePhoneNumberLocked(device *model.Device) bool {

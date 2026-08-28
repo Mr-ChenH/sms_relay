@@ -64,6 +64,7 @@ static String cachedEID;
 static ESimInfo cachedEsimInfo = {};
 static String cachedOperator;
 static String cachedPhoneNumber;
+static String detectedPhoneNumber;
 static int cachedCellularCSQ = 99;
 static int cachedCellularRSSI = 0;
 static unsigned long lastIdentityRefreshAt = 0;
@@ -221,14 +222,10 @@ static void refreshIdentityCache(bool force = false) {
     cachedPhoneNumber = "";
     cachedOperator = "";
   }
-  bool settlingIdentity = identitySettleUntil > 0 && (long)(identitySettleUntil - now) > 0;
   cachedOperator = parseOperatorName(sendATCommand("AT+COPS?", 5000));
-  String queriedPhoneNumber = parsePhoneNumber(sendATCommand("AT+CNUM", 3000));
-  if (queriedPhoneNumber.length() > 0 && !identityChanged && !settlingIdentity) {
-    cachedPhoneNumber = queriedPhoneNumber;
-  } else if (identityChanged || settlingIdentity) {
-    cachedPhoneNumber = "";
-  }
+  detectedPhoneNumber = parsePhoneNumber(sendATCommand("AT+CNUM", 3000));
+  // CNUM is only an untrusted candidate. Some modem firmware keeps returning
+  // the previous profile's EF_MSISDN after a profile switch.
   cachedCellularCSQ = parseCSQ(sendATCommand("AT+CSQ", 3000));
   cachedCellularRSSI = cachedCellularCSQ == 99 ? 0 : -113 + 2 * cachedCellularCSQ;
 
@@ -288,6 +285,7 @@ static void terminalHeartbeat(bool refreshIdentity = true) {
   doc["esimFreeNvMemory"] = cachedEsimInfo.freeNonVolatileMemory;
   doc["esimFreeVolatileMemory"] = cachedEsimInfo.freeVolatileMemory;
   doc["phoneNumber"] = cachedPhoneNumber;
+  doc["detectedPhoneNumber"] = detectedPhoneNumber;
   doc["ip"] = WiFi.localIP().toString();
   doc["rssi"] = WiFi.RSSI();
   doc["cellularRssi"] = cachedCellularRSSI;
@@ -302,6 +300,7 @@ void terminalClientIdentityReady() {
   cachedEID = "";
   cachedOperator = "";
   cachedPhoneNumber = "";
+  detectedPhoneNumber = "";
   lastIdentityRefreshAt = 0;
   identitySettleUntil = millis() + IDENTITY_SETTLE_WINDOW_MS;
   refreshIdentityCache(true);
@@ -317,6 +316,7 @@ static void refreshIdentityAfterProfileChange() {
   cachedEID = "";
   cachedOperator = "";
   cachedPhoneNumber = "";
+  detectedPhoneNumber = "";
   lastIdentityRefreshAt = 0;
   identitySettleUntil = millis() + IDENTITY_SETTLE_WINDOW_MS;
   refreshIdentityCache(true);

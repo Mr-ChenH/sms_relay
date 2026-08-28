@@ -79,6 +79,12 @@ function saveEdit(profile: EsimProfile) {
   editingId.value = ''
 }
 
+function useDetectedPhone(profile: EsimProfile) {
+  if (!profile.detectedPhoneNumber || profile.phoneNumberConflict) return
+  if (!drafts[profile.id]) startEdit(profile)
+  drafts[profile.id].phoneNumber = profile.detectedPhoneNumber
+}
+
 function hasChanges(profile: EsimProfile) {
   const draft = drafts[profile.id]
   return !!draft && (draft.country.trim() !== (profile.country || '') || draft.phoneNumber.trim() !== (profile.phoneNumber || ''))
@@ -130,7 +136,7 @@ function profileLabel(profile: EsimProfile) {
               <td><span class="profile-device-line"><b>{{ deviceFor(profile)?.name || '未知终端' }}</b><span class="mono">{{ deviceFor(profile)?.deviceId || profile.deviceId }}</span></span></td>
               <td><span :class="['status', profile.available ? statusClass(profile.state) : 'gray']">{{ profile.available ? (profile.state === 'enabled' ? '已启用' : '存在') : '终端中不存在' }}</span><small v-if="!profile.available">可能已删除或尚未同步</small></td>
               <td><template v-if="editingId === profile.id"><input v-model="drafts[profile.id].country" class="field compact-field" placeholder="例如：中国" @keydown.esc="cancelEdit(profile)"></template><span v-else>{{ profile.country || '未设置' }}</span></td>
-              <td><template v-if="editingId === profile.id"><input v-model="drafts[profile.id].phoneNumber" class="field compact-field mono" placeholder="例如：+8613800138000" @keydown.enter="saveEdit(profile)" @keydown.esc="cancelEdit(profile)"></template><span v-else :class="['mono', { muted: !profile.phoneNumber }]">{{ profile.phoneNumber || '未设置' }}</span></td>
+              <td><template v-if="editingId === profile.id"><input v-model="drafts[profile.id].phoneNumber" class="field compact-field mono" placeholder="例如：+8613800138000" @keydown.enter="saveEdit(profile)" @keydown.esc="cancelEdit(profile)"><button v-if="profile.detectedPhoneNumber && !profile.phoneNumberConflict" class="btn small" type="button" @click="useDetectedPhone(profile)">采纳候选</button></template><template v-else><span :class="['mono', { muted: !profile.phoneNumber }]">{{ profile.phoneNumber || '未设置' }}</span><small v-if="profile.detectedPhoneNumber" class="mono">CNUM 候选 {{ profile.detectedPhoneNumber }}</small><small v-if="profile.phoneNumberConflict" class="status danger">号码冲突：{{ profile.phoneNumberConflict }}</small><small v-else-if="profile.phoneNumberSource === 'cnum_stable'" class="status ok">CNUM 稳定确认</small><small v-else-if="profile.phoneNumberSource === 'verified'" class="status ok">已验证</small><small v-else-if="profile.phoneNumberSource === 'cnum_candidate'" class="status info">候选观测 {{ profile.detectedPhoneCount || 1 }} 次</small></template></td>
               <td><template v-if="subscriptionFor(profile)"><b>{{ subscriptionFor(profile)?.type === 'recharge' ? '充值提醒' : '短信保活' }}</b><small>每 {{ subscriptionFor(profile)?.intervalDays }} 天 · {{ subscriptionFor(profile)?.enabled ? '已启用' : '已停用' }}</small><span :class="['status', statusClass(subscriptionFor(profile)?.status || '')]">{{ subscriptionFor(profile)?.status }}</span></template><span v-else class="muted">未配置</span></td>
               <td><span v-if="profile.lastSeenAt">{{ formatTime(profile.lastSeenAt) }}</span><span v-else>-</span><small v-if="profile.missingSince">自 {{ formatTime(profile.missingSince) }} 起缺失</small></td>
               <td><div v-if="editingId === profile.id" class="profile-row-actions"><button class="btn small primary" :disabled="savingId === profile.id || !hasChanges(profile)" @click="saveEdit(profile)">{{ savingId === profile.id ? '保存中' : '保存' }}</button><button class="btn small" @click="cancelEdit(profile)">取消</button></div><button v-else class="btn small" :disabled="savingId === profile.id" @click="startEdit(profile)">编辑信息</button></td>
