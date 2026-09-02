@@ -90,7 +90,7 @@ static bool persistQueue() {
 
 bool smsQueueInit() {
   queueCount = 0;
-  storageReady = LittleFS.begin(true);
+  storageReady = LittleFS.begin(true, "/littlefs", 10, "littlefs");
   if (!storageReady) {
     logCaptureLn("LittleFS 初始化失败，短信队列仅使用 RAM");
     return false;

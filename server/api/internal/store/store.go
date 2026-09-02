@@ -542,7 +542,7 @@ func formatLocalTimestamp(timestamp time.Time) string {
 	if timestamp.IsZero() {
 		return ""
 	}
-	return timestamp.In(time.Local).Format(time.RFC3339)
+	return timestamp.In(time.Local).Format("2006-01-02 15:04:05 MST")
 }
 
 func (s *Store) Rules() []model.RoutingRule {

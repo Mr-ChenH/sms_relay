@@ -89,4 +89,5 @@ void loop() {
   terminalClientLoop();
   handleSerialConsole();
   checkSerial1URC();
+  smsStorageService();
 }

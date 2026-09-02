@@ -454,7 +454,8 @@ Profile 下载由服务端运行的 `lpac` LPA 完成。Go API 通过 MQTT APDU 
 | `SMS_HUB_PUBLIC_BASE_URL` | 空 | 管理台展示给终端的公开 API 地址 |
 | `SMS_HUB_PUBLIC_MQTT_BROKER` | 空 | 管理台展示给终端的公开 MQTT 地址 |
 | `LPAC_PATH` | `lpac` | Linux 服务端 lpac 可执行文件路径；Windows 不支持下载 |
-| `TZ` | 使用系统时区；Docker Compose 默认为 `Asia/Shanghai` | 服务启动时显式加载的 IANA 时区，用于转发模板、统计和调度，例如 `Asia/Shanghai`、`America/New_York`；配置无效时服务拒绝启动 |
+| `SMS_HUB_TIMEZONE` | `Asia/Shanghai` | 服务端通知、统计和调度使用的 IANA 时区；优先级高于 `TZ` |
+| `TZ` | 空 | `SMS_HUB_TIMEZONE`未设置时使用的兼容时区变量 |
 | `SMS_HUB_MCP_TOKEN` | 空 | MCP Bearer Token；为空时 `/mcp` 不启用 |
 | `SMS_HUB_MCP_ALLOW_WRITE` | `false` | 是否允许 MCP 调用 `send_sms` 等写操作 |
 

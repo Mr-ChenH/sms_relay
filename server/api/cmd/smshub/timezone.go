@@ -9,10 +9,12 @@ import (
 )
 
 func configureTimezone() (string, error) {
-	name := strings.TrimSpace(os.Getenv("TZ"))
+	name := strings.TrimSpace(os.Getenv("SMS_HUB_TIMEZONE"))
 	if name == "" {
-		name = time.Local.String()
-		return name, nil
+		name = strings.TrimSpace(os.Getenv("TZ"))
+	}
+	if name == "" {
+		name = "Asia/Shanghai"
 	}
 	location, err := time.LoadLocation(name)
 	if err != nil {

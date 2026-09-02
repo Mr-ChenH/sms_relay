@@ -18,11 +18,22 @@
 static const char* WIFI_PREF_NAMESPACE = "wifi_runtime";
 static const unsigned long WIFI_CONNECT_TIMEOUT_MS = 20000;
 static const unsigned long WIFI_PROVISION_WAIT_MS = 30000;  // 首次配网等待上限，避免 setup 永久阻塞
+static const unsigned long WIFI_RECONNECT_INTERVAL_MS = 30000;
+static const unsigned long WIFI_RESTART_CONNECT_MS = 300000;
 
 static bool apStarted = false;
 static bool pendingCredentials = false;
 static bool pendingTerminalConfig = false;
 static bool wifiWasConnected = false;
+static bool wifiHasConnected = false;
+static unsigned long wifiDisconnectedAt = 0;
+static unsigned long lastWifiReconnectAt = 0;
+static uint8_t lastWifiDisconnectReason = 0;
+static unsigned long wifiReconnectAttempts = 0;
+static bool wifiDisconnectLogPending = false;
+static bool wifiRecoveryLogPending = false;
+static unsigned long lastWifiOfflineSeconds = 0;
+static unsigned long lastWifiRecoveryAttempts = 0;
 static String pendingSSID;
 static String pendingPassword;
 
@@ -108,11 +119,27 @@ static void onWiFiEvent(arduino_event_t* event) {
     case ARDUINO_EVENT_WIFI_STA_GOT_IP:
       if (!wifiWasConnected) {
         logCaptureLn(String("WiFi 已连接, IP: ") + WiFi.localIP().toString());
+        if (wifiDisconnectedAt > 0) {
+          lastWifiOfflineSeconds = (millis() - wifiDisconnectedAt) / 1000;
+          if (lastWifiOfflineSeconds >= 2) {
+            lastWifiRecoveryAttempts = wifiReconnectAttempts;
+            wifiRecoveryLogPending = true;
+          }
+        }
       }
       wifiWasConnected = true;
+      wifiHasConnected = true;
+      wifiDisconnectedAt = 0;
+      lastWifiReconnectAt = 0;
+      wifiReconnectAttempts = 0;
       break;
     case ARDUINO_EVENT_WIFI_STA_DISCONNECTED:
-      if (wifiWasConnected) logCaptureLn(String("WiFi 已断开，等待自动重连"));
+      lastWifiDisconnectReason = event->event_info.wifi_sta_disconnected.reason;
+      if (wifiHasConnected && wifiDisconnectedAt == 0) wifiDisconnectedAt = millis();
+      if (wifiWasConnected) {
+        logCaptureLn(String("WiFi 已断开 reason=") + lastWifiDisconnectReason + "，等待自动重连");
+        wifiDisconnectLogPending = true;
+      }
       wifiWasConnected = false;
       break;
     default:
@@ -268,6 +295,38 @@ bool connectWiFiOrStartProvisioning() {
 void wifiManagerLoop() {
   applyPendingConfiguration();
   webConfigLoop();
+
+  if (wifiDisconnectLogPending) {
+    wifiDisconnectLogPending = false;
+    terminalReportLog("warn", String("WiFi disconnected; reason=") + lastWifiDisconnectReason);
+  }
+  if (wifiRecoveryLogPending) {
+    wifiRecoveryLogPending = false;
+    terminalReportLog("info", String("WiFi recovered after ") + lastWifiOfflineSeconds +
+                                "s; reason=" + lastWifiDisconnectReason +
+                                "; attempts=" + lastWifiRecoveryAttempts);
+  }
+
+  if (WiFi.status() == WL_CONNECTED) return;
+  unsigned long now = millis();
+  if (wifiDisconnectedAt == 0) wifiDisconnectedAt = now;
+  if (lastWifiReconnectAt > 0 && now - lastWifiReconnectAt < WIFI_RECONNECT_INTERVAL_MS) return;
+  lastWifiReconnectAt = now;
+  wifiReconnectAttempts++;
+
+  // ESP32 auto-reconnect can stop retrying after some disconnect reasons.
+  // Periodically force a reconnect, and restart association after a long outage.
+  if (now - wifiDisconnectedAt < WIFI_RESTART_CONNECT_MS) {
+    WiFi.reconnect();
+    return;
+  }
+  String ssid;
+  String password;
+  if (loadSavedWiFi(ssid, password)) {
+    logCaptureLn(String("WiFi 长时间离线，重新发起连接: ") + ssid);
+    WiFi.disconnect(false, false);
+    WiFi.begin(ssid.c_str(), password.c_str());
+  }
 }
 
 void resetWiFiProvisioning() {

@@ -51,7 +51,7 @@ func TestRenderAppriseMessageUsesLocalTimezone(t *testing.T) {
 	if title != "短信来自 95588" {
 		t.Fatalf("title = %q", title)
 	}
-	if body != "验证码 123456\n时间: 2026-08-12T15:30:00+08:00" {
+	if body != "验证码 123456\n时间: 2026-08-12 15:30:00 UTC+8" {
 		t.Fatalf("body = %q", body)
 	}
 	if tag != "verification" {

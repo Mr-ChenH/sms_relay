@@ -12,6 +12,7 @@
 #include <ArduinoJson.h>
 #include <WiFiClient.h>
 #include <PubSubClient.h>
+#include <esp_system.h>
 #include <new>
 
 #ifndef SMS_HUB_DEFAULT_API_BASE_URL
@@ -79,8 +80,40 @@ static unsigned long lastEsimInitRetryAt = 0;
 static String lastEsimSyncError;
 static String logQueue[MAX_LOG_QUEUE];
 static size_t logQueueSize = 0;
+static uint32_t bootCount = 0;
+static String resetReason;
+static bool bootDiagnosticsPending = true;
 
 static void flushSMSQueue();
+
+static String resetReasonName(esp_reset_reason_t reason) {
+  switch (reason) {
+    case ESP_RST_POWERON: return "power_on";
+    case ESP_RST_EXT: return "external";
+    case ESP_RST_SW: return "software";
+    case ESP_RST_PANIC: return "panic";
+    case ESP_RST_INT_WDT: return "interrupt_watchdog";
+    case ESP_RST_TASK_WDT: return "task_watchdog";
+    case ESP_RST_WDT: return "watchdog";
+    case ESP_RST_DEEPSLEEP: return "deep_sleep";
+    case ESP_RST_BROWNOUT: return "brownout";
+    case ESP_RST_SDIO: return "sdio";
+    case ESP_RST_USB: return "usb";
+    case ESP_RST_JTAG: return "jtag";
+    case ESP_RST_EFUSE: return "efuse";
+    case ESP_RST_PWR_GLITCH: return "power_glitch";
+    case ESP_RST_CPU_LOCKUP: return "cpu_lockup";
+    default: return String("unknown_") + (int)reason;
+  }
+}
+
+static void initBootDiagnostics() {
+  resetReason = resetReasonName(esp_reset_reason());
+  preferences.begin("boot_diag", false);
+  bootCount = preferences.getUInt("count", 0) + 1;
+  preferences.putUInt("count", bootCount);
+  preferences.end();
+}
 
 static String mqttBrokerURL() {
   String broker = config.smsHubMqttBroker;
@@ -342,8 +375,8 @@ static void flushSMSQueue() {
   }
 }
 
-void terminalReportSMS(const char* sender, const char* text, const char* timestamp) {
-  if (!terminalClientEnabled()) return;
+bool terminalReportSMS(const char* sender, const char* text, const char* timestamp) {
+  if (!terminalClientEnabled()) return false;
   QueuedSMS item;
   item.messageId = terminalDeviceID() + "-" + String(millis()) + "-" + String(++smsSequence);
   item.sender = sender ? sender : "";
@@ -354,9 +387,10 @@ void terminalReportSMS(const char* sender, const char* text, const char* timesta
   if (!smsQueuePush(item)) {
     terminalReportLog("error", "persistent SMS queue full; rejecting new message");
     smsQueueFlushNow();
-    return;
+    return false;
   }
   flushSMSQueue();
+  return true;
 }
 
 void terminalReportLog(const String& level, const String& message) {
@@ -898,6 +932,7 @@ void terminalClientConfigChanged() {
 }
 
 void terminalClientInit() {
+  initBootDiagnostics();
   smsQueueInit();
   if (!terminalClientEnabled()) {
     logCaptureLn(String("中心终端客户端未启用：未配置 MQTT Broker"));
@@ -914,6 +949,12 @@ void terminalClientService() {
   if (!terminalClientEnabled() || WiFi.status() != WL_CONNECTED) return;
   bool mqttReady = ensureMqttConnected();
   if (mqttReady) mqttClient.loop();
+  if (mqttReady && bootDiagnosticsPending) {
+    bootDiagnosticsPending = false;
+    terminalReportLog("info", String("boot diagnostics: reason=") + resetReason +
+                                "; count=" + bootCount +
+                                "; heap=" + ESP.getFreeHeap());
+  }
   if (mqttReady) flushSMSQueue();
   if (mqttReady) flushCommandResult();
   if (otaRebootPending && (long)(millis() - otaRebootAt) >= 0 && pendingResultCommandId.length() == 0) {

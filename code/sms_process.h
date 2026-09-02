@@ -10,8 +10,9 @@ void clearConcatSlot(int slot);
 void checkConcatTimeout();
 String readSerialLine(HardwareSerial& port);
 bool isHexString(const String& str);
-void processSmsContent(const char* sender, const char* text, const char* timestamp);
+bool processSmsContent(const char* sender, const char* text, const char* timestamp);
 void checkSerial1URC();
+void smsStorageService();
 void drainSerial1Urx();
 
 #endif

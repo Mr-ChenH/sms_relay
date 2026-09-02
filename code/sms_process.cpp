@@ -1,5 +1,6 @@
 #include "sms_process.h"
 #include "logger.h"
+#include "modem.h"
 #include "terminal_client.h"
 
 // 初始化长短信缓存
@@ -161,22 +162,22 @@ bool isHexString(const String& str) {
 }
 
 // 处理最终短信内容。采集端不做过滤或远程命令解释，统一交给中心服务审计和路由。
-void processSmsContent(const char* sender, const char* text, const char* timestamp) {
+bool processSmsContent(const char* sender, const char* text, const char* timestamp) {
   logCaptureLn(String("=== 处理短信内容 ==="));
   logCaptureLn(String("发送者: ") + String(sender));
   logCaptureLn(String("时间戳: ") + String(timestamp));
   logCaptureLn(String("内容: ") + String(text));
   logCaptureLn(String("===================="));
-  terminalReportSMS(sender, text, timestamp);
+  return terminalReportSMS(sender, text, timestamp);
 }
 
-static void handlePduLine(const String& line) {
+static bool handlePduLine(const String& line) {
   logCaptureLn(String("收到PDU数据: " + line));
   logCaptureLn(String("PDU长度: " + String(line.length()) + " 字符"));
 
   if (!pdu.decodePDU(line.c_str())) {
     logCaptureLn(String("❌ PDU解析失败！"));
-    return;
+    return false;
   }
 
   logCaptureLn(String("✓ PDU解析成功"));
@@ -196,15 +197,13 @@ static void handlePduLine(const String& line) {
   if (totalParts > 1 && partNumber > 0) {
     if (totalParts > MAX_CONCAT_PARTS || partNumber > totalParts) {
       logCaptureF("长短信分段超出容量，按单段上报: %d/%d\n", partNumber, totalParts);
-      processSmsContent(pdu.getSender(), pdu.getText(), pdu.getTimeStamp());
-      return;
+      return processSmsContent(pdu.getSender(), pdu.getText(), pdu.getTimeStamp());
     }
     logCaptureF("收到长短信分段 %d/%d\n", partNumber, totalParts);
 
     int slot = findOrCreateConcatSlot(refNumber, pdu.getSender(), totalParts);
     if (slot < 0) {
-      processSmsContent(pdu.getSender(), pdu.getText(), pdu.getTimeStamp());
-      return;
+      return processSmsContent(pdu.getSender(), pdu.getText(), pdu.getTimeStamp());
     }
     int partIndex = partNumber - 1;
     if (partIndex >= 0 && partIndex < MAX_CONCAT_PARTS) {
@@ -230,20 +229,23 @@ static void handlePduLine(const String& line) {
       logCaptureLn(String("✅ 长短信已收齐，开始合并转发"));
 
       String fullText = assembleConcatSms(slot);
-      processSmsContent(concatBuffer[slot].sender.c_str(),
-                        fullText.c_str(),
-                        concatBuffer[slot].timestamp.c_str());
-
+      bool queued = processSmsContent(concatBuffer[slot].sender.c_str(),
+                                      fullText.c_str(),
+                                      concatBuffer[slot].timestamp.c_str());
+      if (!queued) return false;
       clearConcatSlot(slot);
     }
-  } else {
-    processSmsContent(pdu.getSender(), pdu.getText(), pdu.getTimeStamp());
+    return true;
   }
+  return processSmsContent(pdu.getSender(), pdu.getText(), pdu.getTimeStamp());
 }
 
 // URC 解析状态机（文件级状态，供 checkSerial1URC 与 drainSerial1Urx 共用）
 static enum { URC_IDLE,
               URC_WAIT_PDU } urcState = URC_IDLE;
+static unsigned long lastStorageScanAt = 0;
+static const unsigned long STORAGE_SCAN_INTERVAL_MS = 60000;
+static const int MAX_STORAGE_MESSAGES_PER_SCAN = 8;
 
 // 处理一行串口数据（+CMT 头 / PDU 数据行 / 无头 PDU 行）
 static void processSerial1Line(const String& line) {
@@ -276,6 +278,43 @@ static void processSerial1Line(const String& line) {
       urcState = URC_IDLE;
     }
   }
+}
+
+void smsStorageService() {
+  unsigned long now = millis();
+  if (!modemReady || (lastStorageScanAt > 0 && now - lastStorageScanAt < STORAGE_SCAN_INTERVAL_MS)) return;
+  lastStorageScanAt = now;
+
+  String response = sendATCommand("AT+CMGL=0", 15000);
+  int indexes[MAX_STORAGE_MESSAGES_PER_SCAN];
+  int processed = 0;
+  int pendingIndex = -1;
+  int start = 0;
+  while (start <= response.length() && processed < MAX_STORAGE_MESSAGES_PER_SCAN) {
+    int end = response.indexOf('\n', start);
+    if (end < 0) end = response.length();
+    String line = response.substring(start, end);
+    line.replace("\r", "");
+    line.trim();
+    if (line.startsWith("+CMGL:")) {
+      int colon = line.indexOf(':');
+      int comma = line.indexOf(',', colon + 1);
+      pendingIndex = comma > colon ? line.substring(colon + 1, comma).toInt() : -1;
+    } else if (pendingIndex > 0 && isHexString(line) && line.length() >= 20) {
+      if (handlePduLine(line)) indexes[processed++] = pendingIndex;
+      pendingIndex = -1;
+    }
+    if (end == response.length()) break;
+    start = end + 1;
+  }
+
+  for (int i = 0; i < processed; i++) {
+    String deleted = sendATCommand((String("AT+CMGD=") + indexes[i]).c_str(), 5000);
+    if (deleted.indexOf("OK") < 0) {
+      logCaptureLn(String("短信存储删除失败 index=") + indexes[i] + ": " + deleted);
+    }
+  }
+  if (processed > 0) terminalReportLog("info", String("stored SMS recovered count=") + processed);
 }
 
 // 处理URC和PDU
