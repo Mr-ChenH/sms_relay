@@ -1,6 +1,6 @@
 #pragma once
 
-#define SMSHUB_FIRMWARE_VERSION "0.10.3-terminal"
+#define SMSHUB_FIRMWARE_VERSION "0.10.4-terminal"
 #define SMSHUB_HARDWARE_MODEL "ESP32-C3 + ML307A"
 
 struct SMSHubFirmwareMetadata {

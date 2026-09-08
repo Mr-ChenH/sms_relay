@@ -3,6 +3,12 @@
 
 #include "globals.h"
 
+enum SmsPduResult {
+  SMS_PDU_FAILED,
+  SMS_PDU_BUFFERED,
+  SMS_PDU_QUEUED
+};
+
 void initConcatBuffer();
 int findOrCreateConcatSlot(int refNumber, const char* sender, int totalParts);
 String assembleConcatSms(int slot);

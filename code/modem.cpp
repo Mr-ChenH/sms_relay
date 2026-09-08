@@ -130,7 +130,7 @@ bool modemInit() {
 
   bool smsConfigured = false;
   for (int attempt = 0; attempt < 3; attempt++) {
-    if (sendATandWaitOK("AT+CNMI=2,2,0,0,0", 1000) &&
+    if (sendATandWaitOK("AT+CNMI=2,1,0,0,0", 1000) &&
         sendATandWaitOK("AT+CMGF=0", 1000)) {
       smsConfigured = true;
       break;

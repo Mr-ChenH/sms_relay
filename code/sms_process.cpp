@@ -11,6 +11,7 @@ void initConcatBuffer() {
     for (int j = 0; j < MAX_CONCAT_PARTS; j++) {
       concatBuffer[i].parts[j].valid = false;
       concatBuffer[i].parts[j].text = "";
+      concatBuffer[i].storageIndexes[j] = 0;
     }
   }
 }
@@ -23,6 +24,7 @@ int findOrCreateConcatSlot(int refNumber, const char* sender, int totalParts) {
   for (int i = 0; i < MAX_CONCAT_MESSAGES; i++) {
     if (concatBuffer[i].inUse && 
         concatBuffer[i].refNumber == refNumber &&
+        concatBuffer[i].totalParts == totalParts &&
         concatBuffer[i].sender.equals(sender)) {
       return i;
     }
@@ -40,6 +42,7 @@ int findOrCreateConcatSlot(int refNumber, const char* sender, int totalParts) {
       for (int j = 0; j < MAX_CONCAT_PARTS; j++) {
         concatBuffer[i].parts[j].valid = false;
         concatBuffer[i].parts[j].text = "";
+        concatBuffer[i].storageIndexes[j] = 0;
       }
       return i;
     }
@@ -66,6 +69,7 @@ int findOrCreateConcatSlot(int refNumber, const char* sender, int totalParts) {
   for (int j = 0; j < MAX_CONCAT_PARTS; j++) {
     concatBuffer[oldestSlot].parts[j].valid = false;
     concatBuffer[oldestSlot].parts[j].text = "";
+    concatBuffer[oldestSlot].storageIndexes[j] = 0;
   }
   return oldestSlot;
 }
@@ -97,6 +101,7 @@ void clearConcatSlot(int slot) {
   for (int j = 0; j < MAX_CONCAT_PARTS; j++) {
     concatBuffer[slot].parts[j].valid = false;
     concatBuffer[slot].parts[j].text = "";
+    concatBuffer[slot].storageIndexes[j] = 0;
   }
 }
 
@@ -106,21 +111,13 @@ void checkConcatTimeout() {
   for (int i = 0; i < MAX_CONCAT_MESSAGES; i++) {
     if (concatBuffer[i].inUse) {
       if (now - concatBuffer[i].firstPartTime >= CONCAT_TIMEOUT_MS) {
-        logCaptureLn(String("⏰ 长短信超时，强制转发不完整消息"));
-        logCaptureF("  参考号: %d, 已收到: %d/%d\n", 
-                      concatBuffer[i].refNumber,
-                      concatBuffer[i].receivedParts,
-                      concatBuffer[i].totalParts);
-        
-        // 合并已收到的分段
-        String fullText = assembleConcatSms(i);
-        
-        // 处理短信内容
-        processSmsContent(concatBuffer[i].sender.c_str(), 
-                         fullText.c_str(), 
-                         concatBuffer[i].timestamp.c_str());
-        
-        // 清空槽位
+        logCaptureLn(String("长短信等待超时，保留模组分段并等待后续补扫"));
+        logCaptureF("  参考号: %d, 已收到: %d/%d\n",
+                    concatBuffer[i].refNumber,
+                    concatBuffer[i].receivedParts,
+                    concatBuffer[i].totalParts);
+        // 未收齐时绝不上传占位消息，也不删除模组记录。后续人工诊断
+        // 仍可从ME读取原始分段，避免把不完整内容当作正常短信上报。
         clearConcatSlot(i);
       }
     }
@@ -171,79 +168,79 @@ bool processSmsContent(const char* sender, const char* text, const char* timesta
   return terminalReportSMS(sender, text, timestamp);
 }
 
-static bool handlePduLine(const String& line) {
-  logCaptureLn(String("收到PDU数据: " + line));
-  logCaptureLn(String("PDU长度: " + String(line.length()) + " 字符"));
+static bool deleteStoredSMS(int index) {
+  if (index <= 0) return true;
+  String response = sendATCommand((String("AT+CMGD=") + index).c_str(), 5000);
+  if (response.indexOf("OK") >= 0) return true;
+  logCaptureLn(String("短信存储删除失败 index=") + index + ": " + response);
+  return false;
+}
+
+static SmsPduResult handlePduLine(const String& line, int storageIndex = 0) {
+  logCaptureLn(String("收到PDU数据: ") + line);
+  logCaptureLn(String("PDU长度: ") + line.length() + " 字符");
 
   if (!pdu.decodePDU(line.c_str())) {
-    logCaptureLn(String("❌ PDU解析失败！"));
-    return false;
+    logCaptureLn(String("PDU解析失败"));
+    return SMS_PDU_FAILED;
   }
 
-  logCaptureLn(String("✓ PDU解析成功"));
+  logCaptureLn(String("PDU解析成功"));
   logCaptureLn(String("=== 短信内容 ==="));
-  logCaptureLn(String("发送者: " + String(pdu.getSender())));
-  logCaptureLn(String("时间戳: " + String(pdu.getTimeStamp())));
-  logCaptureLn(String("内容: " + String(pdu.getText())));
+  logCaptureLn(String("发送者: ") + pdu.getSender());
+  logCaptureLn(String("时间戳: ") + pdu.getTimeStamp());
+  logCaptureLn(String("内容: ") + pdu.getText());
 
   int* concatInfo = pdu.getConcatInfo();
   int refNumber = concatInfo[0];
   int partNumber = concatInfo[1];
   int totalParts = concatInfo[2];
-
   logCaptureF("长短信信息: 参考号=%d, 当前=%d, 总计=%d\n", refNumber, partNumber, totalParts);
-  logCaptureLn(String("==============="));
 
-  if (totalParts > 1 && partNumber > 0) {
-    if (totalParts > MAX_CONCAT_PARTS || partNumber > totalParts) {
-      logCaptureF("长短信分段超出容量，按单段上报: %d/%d\n", partNumber, totalParts);
-      return processSmsContent(pdu.getSender(), pdu.getText(), pdu.getTimeStamp());
-    }
-    logCaptureF("收到长短信分段 %d/%d\n", partNumber, totalParts);
-
-    int slot = findOrCreateConcatSlot(refNumber, pdu.getSender(), totalParts);
-    if (slot < 0) {
-      return processSmsContent(pdu.getSender(), pdu.getText(), pdu.getTimeStamp());
-    }
-    int partIndex = partNumber - 1;
-    if (partIndex >= 0 && partIndex < MAX_CONCAT_PARTS) {
-      if (!concatBuffer[slot].parts[partIndex].valid) {
-        concatBuffer[slot].parts[partIndex].valid = true;
-        concatBuffer[slot].parts[partIndex].text = String(pdu.getText());
-        concatBuffer[slot].receivedParts++;
-
-        if (concatBuffer[slot].receivedParts == 1) {
-          concatBuffer[slot].timestamp = String(pdu.getTimeStamp());
-        }
-
-        logCaptureF("  已缓存分段 %d，当前已收到 %d/%d\n",
-                    partNumber,
-                    concatBuffer[slot].receivedParts,
-                    totalParts);
-      } else {
-        logCaptureF("  ⚠️ 分段 %d 已存在，跳过\n", partNumber);
-      }
-    }
-
-    if (concatBuffer[slot].receivedParts >= totalParts) {
-      logCaptureLn(String("✅ 长短信已收齐，开始合并转发"));
-
-      String fullText = assembleConcatSms(slot);
-      bool queued = processSmsContent(concatBuffer[slot].sender.c_str(),
-                                      fullText.c_str(),
-                                      concatBuffer[slot].timestamp.c_str());
-      if (!queued) return false;
-      clearConcatSlot(slot);
-    }
-    return true;
+  if (totalParts <= 1 || partNumber <= 0) {
+    return processSmsContent(pdu.getSender(), pdu.getText(), pdu.getTimeStamp())
+             ? SMS_PDU_QUEUED : SMS_PDU_FAILED;
   }
-  return processSmsContent(pdu.getSender(), pdu.getText(), pdu.getTimeStamp());
+  if (totalParts > MAX_CONCAT_PARTS || partNumber > totalParts) {
+    logCaptureF("长短信分段超出容量，按单段上报: %d/%d\n", partNumber, totalParts);
+    return processSmsContent(pdu.getSender(), pdu.getText(), pdu.getTimeStamp())
+             ? SMS_PDU_QUEUED : SMS_PDU_FAILED;
+  }
+
+  int slot = findOrCreateConcatSlot(refNumber, pdu.getSender(), totalParts);
+  if (slot < 0) return SMS_PDU_FAILED;
+  int partIndex = partNumber - 1;
+  if (!concatBuffer[slot].parts[partIndex].valid) {
+    concatBuffer[slot].parts[partIndex].valid = true;
+    concatBuffer[slot].parts[partIndex].text = String(pdu.getText());
+    concatBuffer[slot].receivedParts++;
+    if (concatBuffer[slot].receivedParts == 1) {
+      concatBuffer[slot].timestamp = String(pdu.getTimeStamp());
+    }
+  }
+  if (storageIndex > 0) concatBuffer[slot].storageIndexes[partIndex] = storageIndex;
+  logCaptureF("已缓存分段 %d，当前已收到 %d/%d\n",
+              partNumber, concatBuffer[slot].receivedParts, totalParts);
+
+  if (concatBuffer[slot].receivedParts < totalParts) return SMS_PDU_BUFFERED;
+
+  String fullText = assembleConcatSms(slot);
+  bool queued = processSmsContent(concatBuffer[slot].sender.c_str(),
+                                  fullText.c_str(),
+                                  concatBuffer[slot].timestamp.c_str());
+  if (!queued) return SMS_PDU_FAILED;
+  for (int i = 0; i < totalParts; i++) deleteStoredSMS(concatBuffer[slot].storageIndexes[i]);
+  clearConcatSlot(slot);
+  return SMS_PDU_QUEUED;
 }
 
 // URC 解析状态机（文件级状态，供 checkSerial1URC 与 drainSerial1Urx 共用）
 static enum { URC_IDLE,
               URC_WAIT_PDU } urcState = URC_IDLE;
 static unsigned long lastStorageScanAt = 0;
+static bool storageScanRequested = true;
+static unsigned long storageScanRequestedAt = 0;
+static const unsigned long STORAGE_SCAN_DEBOUNCE_MS = 5000;
 static const unsigned long STORAGE_SCAN_INTERVAL_MS = 60000;
 static const int MAX_STORAGE_MESSAGES_PER_SCAN = 8;
 
@@ -255,8 +252,12 @@ static void processSerial1Line(const String& line) {
   logCaptureLn(String("Debug> " + line));
 
   if (urcState == URC_IDLE) {
-    // 检测到短信上报URC头
-    if (line.startsWith("+CMT:")) {
+    if (line.startsWith("+CMTI:")) {
+      logCaptureLn(String("检测到+CMTI，安排扫描模组短信存储"));
+      storageScanRequested = true;
+      storageScanRequestedAt = millis();
+      storageScanRequestedAt = millis();
+    } else if (line.startsWith("+CMT:")) {
       logCaptureLn(String("检测到+CMT，等待PDU数据..."));
       urcState = URC_WAIT_PDU;
     } else if (isHexString(line) && line.length() >= 20) {
@@ -282,7 +283,15 @@ static void processSerial1Line(const String& line) {
 
 void smsStorageService() {
   unsigned long now = millis();
-  if (!modemReady || (lastStorageScanAt > 0 && now - lastStorageScanAt < STORAGE_SCAN_INTERVAL_MS)) return;
+  if (!modemReady) return;
+  if (storageScanRequested && storageScanRequestedAt > 0 && now - storageScanRequestedAt < STORAGE_SCAN_DEBOUNCE_MS) return;
+  bool periodicDue = lastStorageScanAt == 0 || now - lastStorageScanAt >= STORAGE_SCAN_INTERVAL_MS;
+  bool requestedDue = storageScanRequested &&
+                      (storageScanRequestedAt == 0 || now - storageScanRequestedAt >= STORAGE_SCAN_DEBOUNCE_MS);
+  if (!periodicDue && !requestedDue) return;
+  storageScanRequested = false;
+  storageScanRequestedAt = 0;
+  storageScanRequestedAt = 0;
   lastStorageScanAt = now;
 
   String response = sendATCommand("AT+CMGL=0", 15000);
@@ -301,7 +310,11 @@ void smsStorageService() {
       int comma = line.indexOf(',', colon + 1);
       pendingIndex = comma > colon ? line.substring(colon + 1, comma).toInt() : -1;
     } else if (pendingIndex > 0 && isHexString(line) && line.length() >= 20) {
-      if (handlePduLine(line)) indexes[processed++] = pendingIndex;
+      SmsPduResult result = handlePduLine(line, pendingIndex);
+      if (result == SMS_PDU_QUEUED) {
+        int* concatInfo = pdu.getConcatInfo();
+        if (concatInfo[2] <= 1) indexes[processed++] = pendingIndex;
+      }
       pendingIndex = -1;
     }
     if (end == response.length()) break;
@@ -309,10 +322,7 @@ void smsStorageService() {
   }
 
   for (int i = 0; i < processed; i++) {
-    String deleted = sendATCommand((String("AT+CMGD=") + indexes[i]).c_str(), 5000);
-    if (deleted.indexOf("OK") < 0) {
-      logCaptureLn(String("短信存储删除失败 index=") + indexes[i] + ": " + deleted);
-    }
+    deleteStoredSMS(indexes[i]);
   }
   if (processed > 0) terminalReportLog("info", String("stored SMS recovered count=") + processed);
 }

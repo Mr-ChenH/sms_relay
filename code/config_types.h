@@ -12,7 +12,7 @@ struct Config {
 
 // 长短信合并相关定义
 #define MAX_CONCAT_PARTS 10       // 最大支持的长短信分段数
-#define CONCAT_TIMEOUT_MS 30000   // 长短信等待超时时间(毫秒)
+#define CONCAT_TIMEOUT_MS 300000  // 长短信等待超时；分段仍保留在模组存储，可继续恢复
 #define MAX_CONCAT_MESSAGES 5     // 最多同时缓存的长短信组数
 
 // 长短信分段结构
@@ -30,6 +30,7 @@ struct ConcatSms {
   int totalParts;                       // 总分段数
   int receivedParts;                    // 已收到的分段数
   unsigned long firstPartTime;          // 收到第一个分段的时间
+  int storageIndexes[MAX_CONCAT_PARTS]; // 每个分段对应的模组存储索引，0表示实时URC
   SmsPart parts[MAX_CONCAT_PARTS];      // 各分段内容
 };
 
