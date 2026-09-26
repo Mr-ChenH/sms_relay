@@ -59,6 +59,36 @@ func TestOpenILinkServiceAndTargetConfiguration(t *testing.T) {
 	}
 }
 
+func TestOpenILinkTargetRejectsDefaultToken(t *testing.T) {
+	s := newEsimTaskTestStore(t)
+	service, err := s.CreateAppriseService(model.CreateAppriseServiceRequest{
+		Type: "openilink", Name: "WeChat", BaseURL: "http://openilink-hub:9800", Enabled: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = s.CreateAppriseTarget(model.CreateAppriseTargetRequest{
+		ServiceID: service.ID, Name: "Invalid", ConfigKey: "default", Enabled: true,
+	})
+	if err == nil || !strings.Contains(err.Error(), "App Token") {
+		t.Fatalf("create error = %v", err)
+	}
+
+	target, err := s.CreateAppriseTarget(model.CreateAppriseTargetRequest{
+		ServiceID: service.ID, Name: "Valid", ConfigKey: "app-token", Enabled: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = s.UpdateAppriseTarget(target.ID, model.CreateAppriseTargetRequest{
+		ServiceID: service.ID, Name: "Invalid", ConfigKey: "DEFAULT", Enabled: true,
+	})
+	if err == nil || !strings.Contains(err.Error(), "App Token") {
+		t.Fatalf("update error = %v", err)
+	}
+}
+
 func TestOpenILinkInboundConfigurationRequiresSecurityFields(t *testing.T) {
 	s := newEsimTaskTestStore(t)
 	_, err := s.CreateAppriseService(model.CreateAppriseServiceRequest{

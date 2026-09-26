@@ -448,6 +448,9 @@ func (s *Store) CreateAppriseTarget(req model.CreateAppriseTargetRequest) (model
 	if !ok {
 		return model.AppriseTarget{}, errors.New("apprise service is required")
 	}
+	if service.Type == "openilink" && strings.EqualFold(configKey, "default") {
+		return model.AppriseTarget{}, errors.New("OpeniLink App Token is required; default is not a valid token")
+	}
 	tags := normalizeTags(req.Tags)
 	target := model.AppriseTarget{
 		ID:            s.nextIDStringLocked("apprise"),
@@ -484,6 +487,9 @@ func (s *Store) UpdateAppriseTarget(targetID string, req model.CreateAppriseTarg
 	service, ok := s.findAppriseServiceLocked(strings.TrimSpace(req.ServiceID))
 	if !ok {
 		return model.AppriseTarget{}, errors.New("apprise service is required")
+	}
+	if service.Type == "openilink" && strings.EqualFold(configKey, "default") {
+		return model.AppriseTarget{}, errors.New("OpeniLink App Token is required; default is not a valid token")
 	}
 	for i := range s.appriseTargets {
 		if s.appriseTargets[i].ID == targetID {
