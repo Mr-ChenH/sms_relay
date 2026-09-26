@@ -712,6 +712,15 @@ async function testAppriseTarget(target: AppriseTarget) {
   appriseSaveResult.value = result.ok ? `已发送测试通知到 ${target.name}` : `${target.name} 发送失败：${result.message}`
 }
 
+async function copyOpenILinkWebhookURL() {
+  try {
+    await navigator.clipboard.writeText(openILinkWebhookURL.value)
+    appriseServiceResult.value = 'Webhook URL 已复制'
+  } catch {
+    appriseServiceResult.value = `请手动复制 Webhook URL：${openILinkWebhookURL.value}`
+  }
+}
+
 async function saveAppriseService() {
   appriseServiceResult.value = ''
   const payload: CreateAppriseServiceRequest = {
@@ -1106,8 +1115,8 @@ onBeforeUnmount(() => {
               <div class="card-head"><div><b>通知服务</b><small>Apprise 或 OpeniLink Hub 连接</small></div><button class="btn small" type="button" @click="showAppriseServiceForm = true">新增服务</button></div>
               <div v-if="appriseServices.length" class="routes-item-list">
                 <div v-for="service in appriseServices" :key="service.id" class="routes-item">
-                  <div class="routes-item-main"><div class="routes-item-title"><b>{{ service.name }}</b><span class="status info">{{ notificationServiceLabel(service) }}</span><span :class="['status', service.lastStatus === 'success' ? 'ok' : service.lastStatus === 'failed' ? 'danger' : 'gray']">{{ service.enabled ? service.lastStatus : 'disabled' }}</span></div><small class="mono">{{ service.baseUrl }} · 超时 {{ service.notifyTimeoutSeconds || 15 }} 秒</small><small v-if="service.type === 'openilink'">反向控制：{{ service.openilinkInboundEnabled ? `${service.openilinkCapabilities.length} 项功能` : '关闭' }}</small><small>{{ service.lastMessage || '尚未测试连接' }}</small></div>
-                  <div class="routes-item-actions"><button class="btn small" type="button" @click="testAppriseService(service.id)">测试</button><button v-if="service.type === 'openilink'" class="btn small primary" type="button" @click="openAppriseTargetForm(service.id)">配置 App Token</button><button class="btn small" type="button" @click="editAppriseService(service)">编辑</button><button class="btn small danger" type="button" @click="deleteAppriseService(service)">删除</button></div>
+                  <div class="routes-item-main"><div class="routes-item-title"><b>{{ service.name }}</b><span class="status info">{{ notificationServiceLabel(service) }}</span><span :class="['status', service.lastStatus === 'success' ? 'ok' : service.lastStatus === 'failed' ? 'danger' : 'gray']">{{ service.enabled ? service.lastStatus : 'disabled' }}</span></div><small class="mono">{{ service.baseUrl }} · 超时 {{ service.notifyTimeoutSeconds || 15 }} 秒</small><small v-if="service.type === 'openilink'">反向控制：{{ service.openilinkInboundEnabled ? `${service.openilinkCapabilities.length} 项功能` : '关闭' }}</small><small v-if="service.type === 'openilink' && service.openilinkInboundEnabled" class="mono">Webhook：{{ openILinkWebhookURL }}</small><small>{{ service.lastMessage || '尚未测试连接' }}</small></div>
+                  <div class="routes-item-actions"><button class="btn small" type="button" @click="testAppriseService(service.id)">测试</button><button v-if="service.type === 'openilink'" class="btn small" type="button" @click="copyOpenILinkWebhookURL">复制 Webhook URL</button><button v-if="service.type === 'openilink'" class="btn small primary" type="button" @click="openAppriseTargetForm(service.id)">配置 App Token</button><button class="btn small" type="button" @click="editAppriseService(service)">编辑</button><button class="btn small danger" type="button" @click="deleteAppriseService(service)">删除</button></div>
                 </div>
               </div>
               <div v-else class="empty"><b>暂无通知服务</b><small>添加 Apprise 或 OpeniLink Hub 后才能创建并测试通知 Target。</small></div>
@@ -1139,9 +1148,10 @@ onBeforeUnmount(() => {
               <label>{{ appriseServiceForm.type === 'openilink' ? 'OpeniLink Hub 地址' : 'Apprise API 地址' }}</label><input v-model="appriseServiceForm.baseUrl" class="field" type="url" :placeholder="appriseServiceForm.type === 'openilink' ? 'http://openilink-hub:9800' : 'http://apprise:8000'" required>
               <template v-if="appriseServiceForm.type === 'openilink'">
                 <small>Hub 地址用于连接测试；安装实例 App Token 在保存服务后通过“配置 App Token”添加。</small>
+                <label>Webhook 接收地址</label>
+                <div class="webhook-url-row"><input class="field mono" :value="openILinkWebhookURL" readonly><button class="btn" type="button" @click="copyOpenILinkWebhookURL">复制</button></div>
                 <label class="checkbox-row"><input v-model="appriseServiceForm.openilinkInboundEnabled" type="checkbox"> 启用 OpeniLink 反向控制</label>
                 <template v-if="appriseServiceForm.openilinkInboundEnabled">
-                  <label>Webhook URL</label><input class="field mono" :value="openILinkWebhookURL" readonly>
                   <label>Webhook Secret</label><input v-model="appriseServiceForm.openilinkWebhookSecret" class="field" type="password" autocomplete="new-password" required>
                   <label>允许的 Installation ID（逗号分隔）</label><input v-model="appriseServiceForm.openilinkInstallationIdsText" class="field" placeholder="inst_xxx" required>
                   <label>开放功能</label>
