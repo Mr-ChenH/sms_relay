@@ -143,6 +143,37 @@ func TestOpenILinkWebhookHelpDescribesCommand(t *testing.T) {
 	}
 }
 
+func TestFormatOpenILinkDevicesIsReadable(t *testing.T) {
+	lastSeen := time.Date(2026, time.September, 27, 8, 30, 0, 0, time.FixedZone("CST", 8*60*60))
+	result := formatOpenILinkDevices([]model.Device{{
+		ID: "dev-101", Name: "Bedroom", Status: "online", PhoneNumber: "+8613800000000",
+		Operator: "Carrier", CellularRSSI: -83, LastSeenAt: lastSeen,
+	}})
+	for _, wanted := range []string{"终端列表（1）", "1. Bedroom [在线]", "ID：dev-101", "号码：+8613800000000", "蜂窝信号：-83 dBm", "最后在线：2026-09-27 08:30"} {
+		if !strings.Contains(result, wanted) {
+			t.Fatalf("result missing %q:\n%s", wanted, result)
+		}
+	}
+	if strings.ContainsAny(result, "{}") {
+		t.Fatalf("result contains raw JSON: %s", result)
+	}
+}
+
+func TestFormatOpenILinkSMSUsesBlocksAndTruncatesBody(t *testing.T) {
+	result := formatOpenILinkSMS(model.SMSList{
+		Items: []model.SMSMessage{{DeviceName: "Phone", Sender: "10086", Recipient: "+86138", Body: strings.Repeat("长", 200), Timestamp: time.Date(2026, 9, 27, 9, 0, 0, 0, time.UTC)}},
+		Total: 2, Page: 1, PageSize: 1,
+	}, "验证码")
+	for _, wanted := range []string{"短信搜索：验证码", "第 1 页 · 共 2 条", "1. 2026-09-27 09:00 · Phone", "来自：10086", "发往：+86138", "还有更多结果"} {
+		if !strings.Contains(result, wanted) {
+			t.Fatalf("result missing %q:\n%s", wanted, result)
+		}
+	}
+	if !strings.Contains(result, "...") {
+		t.Fatalf("long message was not truncated: %s", result)
+	}
+}
+
 func TestOpenILinkToolsAlwaysIncludeHelp(t *testing.T) {
 	tools := openILinkTools([]string{"list_devices"})
 	if len(tools) != 2 || tools[0].Name != "help" || tools[1].Name != "list_devices" {

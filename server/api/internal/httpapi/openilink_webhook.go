@@ -189,9 +189,9 @@ func (s *Server) executeOpenILinkCommand(service model.AppriseService, command o
 
 	switch command.Command {
 	case "get_overview":
-		return marshalOpenILinkReply(s.store.Dashboard())
+		return formatOpenILinkOverview(s.store.Dashboard())
 	case "list_devices":
-		return marshalOpenILinkReply(s.store.Devices())
+		return formatOpenILinkDevices(s.store.Devices())
 	case "search_sms":
 		query := openILinkStringArg(command, "query")
 		if query == "" {
@@ -202,7 +202,7 @@ func (s *Server) executeOpenILinkCommand(service model.AppriseService, command o
 		if pageSize > 20 {
 			pageSize = 20
 		}
-		return marshalOpenILinkReply(s.store.SMS(query, page, pageSize))
+		return formatOpenILinkSMS(s.store.SMS(query, page, pageSize), query)
 	case "list_esim_profiles":
 		deviceID := firstOpenILinkArg(command, "deviceId", 0)
 		device, ok := s.store.FindDevice(deviceID)
@@ -215,12 +215,12 @@ func (s *Server) executeOpenILinkCommand(service model.AppriseService, command o
 				profiles = append(profiles, profile)
 			}
 		}
-		return marshalOpenILinkReply(map[string]interface{}{"device": device, "profiles": profiles})
+		return formatOpenILinkProfiles(device, profiles)
 	case "get_command_status":
 		commandID := firstOpenILinkArg(command, "commandId", 0)
 		for _, item := range s.store.Commands() {
 			if item.ID == commandID {
-				return marshalOpenILinkReply(item)
+				return formatOpenILinkCommand(item)
 			}
 		}
 		return "命令不存在。"
@@ -244,7 +244,7 @@ func (s *Server) executeOpenILinkCommand(service model.AppriseService, command o
 		if err != nil {
 			return "发送任务创建失败：" + err.Error()
 		}
-		return marshalOpenILinkReply(result)
+		return formatOpenILinkCommandResult("短信发送任务已创建", result)
 	case "refresh_device_status":
 		deviceID := firstOpenILinkArg(command, "deviceId", 0)
 		if deviceID == "" {
@@ -254,7 +254,7 @@ func (s *Server) executeOpenILinkCommand(service model.AppriseService, command o
 		if err != nil {
 			return "状态刷新任务创建失败：" + err.Error()
 		}
-		return marshalOpenILinkReply(created)
+		return formatOpenILinkCreatedCommand("终端状态刷新任务已创建", created)
 	case "switch_esim_profile":
 		deviceID := firstOpenILinkArg(command, "deviceId", 0)
 		iccid := firstOpenILinkArg(command, "iccid", 1)
@@ -282,7 +282,7 @@ func (s *Server) executeOpenILinkCommand(service model.AppriseService, command o
 		if err != nil {
 			return "eSIM 切换任务创建失败：" + err.Error()
 		}
-		return marshalOpenILinkReply(created)
+		return formatOpenILinkCreatedCommand("eSIM Profile 切换任务已创建", created)
 	default:
 		return fmt.Sprintf("SMS Hub 不支持命令 %s。", command.Command)
 	}
@@ -405,6 +405,147 @@ func openILinkIntArg(args map[string]interface{}, name string, fallback int) int
 		return fallback
 	}
 	return int(value)
+}
+
+func formatOpenILinkOverview(dashboard model.Dashboard) string {
+	var reply strings.Builder
+	reply.WriteString("SMS Hub 总览\n")
+	fmt.Fprintf(&reply, "终端：%d 在线 / %d 总数\n", dashboard.OnlineDevices, dashboard.TotalDevices)
+	fmt.Fprintf(&reply, "今日短信：%d\n", dashboard.TodaySMS)
+	fmt.Fprintf(&reply, "分发失败：%d\n", dashboard.DeliveryFailures)
+	fmt.Fprintf(&reply, "运行中的 eSIM 任务：%d", dashboard.RunningEsimTasks)
+
+	if len(dashboard.RecentSMS) > 0 {
+		reply.WriteString("\n\n最近短信")
+		limit := min(len(dashboard.RecentSMS), 3)
+		for i, message := range dashboard.RecentSMS[:limit] {
+			fmt.Fprintf(&reply, "\n\n%d. %s · %s\n来自：%s\n%s", i+1, openILinkTime(message.Timestamp), openILinkValue(message.DeviceName, message.DeviceID), openILinkValue(message.Sender), openILinkSummary(message.Body, 100))
+		}
+	}
+	return reply.String()
+}
+
+func formatOpenILinkDevices(devices []model.Device) string {
+	if len(devices) == 0 {
+		return "终端列表\n暂无终端。"
+	}
+	var reply strings.Builder
+	fmt.Fprintf(&reply, "终端列表（%d）", len(devices))
+	limit := min(len(devices), 10)
+	for i, device := range devices[:limit] {
+		fmt.Fprintf(&reply, "\n\n%d. %s [%s]\nID：%s\n号码：%s\n运营商：%s", i+1, openILinkValue(device.Name, device.DeviceID), openILinkStatusLabel(device.Status), device.ID, openILinkValue(device.PhoneNumber), openILinkValue(device.Operator))
+		if device.CellularRSSI < 0 {
+			fmt.Fprintf(&reply, "\n蜂窝信号：%d dBm", device.CellularRSSI)
+		} else if device.RSSI < 0 {
+			fmt.Fprintf(&reply, "\nWi-Fi 信号：%d dBm", device.RSSI)
+		}
+		if !device.LastSeenAt.IsZero() {
+			fmt.Fprintf(&reply, "\n最后在线：%s", openILinkTime(device.LastSeenAt))
+		}
+	}
+	if len(devices) > limit {
+		fmt.Fprintf(&reply, "\n\n另有 %d 个终端未显示。", len(devices)-limit)
+	}
+	return reply.String()
+}
+
+func formatOpenILinkSMS(messages model.SMSList, query string) string {
+	var reply strings.Builder
+	title := "短信列表"
+	if strings.TrimSpace(query) != "" {
+		title = fmt.Sprintf("短信搜索：%s", openILinkSummary(query, 40))
+	}
+	fmt.Fprintf(&reply, "%s\n第 %d 页 · 共 %d 条", title, messages.Page, messages.Total)
+	if len(messages.Items) == 0 {
+		reply.WriteString("\n\n未找到短信。")
+		return reply.String()
+	}
+	for i, message := range messages.Items {
+		fmt.Fprintf(&reply, "\n\n%d. %s · %s\n来自：%s\n发往：%s\n%s", i+1, openILinkTime(message.Timestamp), openILinkValue(message.DeviceName, message.DeviceID), openILinkValue(message.Sender), openILinkValue(message.Recipient), openILinkSummary(message.Body, 180))
+	}
+	if messages.Page*messages.PageSize < messages.Total {
+		fmt.Fprintf(&reply, "\n\n还有更多结果，使用 page=%d 查看下一页。", messages.Page+1)
+	}
+	return reply.String()
+}
+
+func formatOpenILinkProfiles(device model.Device, profiles []model.EsimProfile) string {
+	var reply strings.Builder
+	fmt.Fprintf(&reply, "eSIM Profile · %s\n设备 ID：%s", openILinkValue(device.Name, device.DeviceID), device.ID)
+	if len(profiles) == 0 {
+		reply.WriteString("\n\n暂无 Profile。")
+		return reply.String()
+	}
+	for i, profile := range profiles {
+		fmt.Fprintf(&reply, "\n\n%d. %s [%s]\nICCID：%s\n运营商：%s\n号码：%s", i+1, openILinkValue(profile.Nickname, profile.ProfileName, profile.Provider), openILinkStatusLabel(profile.State), openILinkValue(profile.ICCID), openILinkValue(profile.Provider), openILinkValue(profile.PhoneNumber, profile.DetectedPhoneNumber))
+	}
+	return reply.String()
+}
+
+func formatOpenILinkCommand(command model.DeviceCommand) string {
+	var reply strings.Builder
+	reply.WriteString("命令状态\n")
+	fmt.Fprintf(&reply, "命令 ID：%s\n", command.ID)
+	fmt.Fprintf(&reply, "设备 ID：%s\n", command.DeviceID)
+	fmt.Fprintf(&reply, "类型：%s\n", command.Type)
+	fmt.Fprintf(&reply, "状态：%s\n", openILinkStatusLabel(command.Status))
+	fmt.Fprintf(&reply, "创建时间：%s", openILinkTime(command.CreatedAt))
+	if strings.TrimSpace(command.Result) != "" {
+		fmt.Fprintf(&reply, "\n结果：%s", openILinkSummary(command.Result, 500))
+	}
+	return reply.String()
+}
+
+func formatOpenILinkCommandResult(title string, result model.CommandResult) string {
+	var reply strings.Builder
+	reply.WriteString(title)
+	fmt.Fprintf(&reply, "\n命令 ID：%s\n状态：%s", result.CommandID, openILinkStatusLabel(result.Status))
+	if strings.TrimSpace(result.Message) != "" {
+		fmt.Fprintf(&reply, "\n说明：%s", openILinkSummary(result.Message, 500))
+	}
+	fmt.Fprintf(&reply, "\n\n查询：/get_command_status %s", result.CommandID)
+	return reply.String()
+}
+
+func formatOpenILinkCreatedCommand(title string, command model.DeviceCommand) string {
+	return fmt.Sprintf("%s\n命令 ID：%s\n设备 ID：%s\n状态：%s\n\n查询：/get_command_status %s", title, command.ID, command.DeviceID, openILinkStatusLabel(command.Status), command.ID)
+}
+
+func openILinkValue(values ...string) string {
+	for _, value := range values {
+		if trimmed := strings.TrimSpace(value); trimmed != "" {
+			return trimmed
+		}
+	}
+	return "-"
+}
+
+func openILinkSummary(value string, limit int) string {
+	value = strings.Join(strings.Fields(value), " ")
+	runes := []rune(value)
+	if len(runes) <= limit {
+		return value
+	}
+	return string(runes[:limit]) + "..."
+}
+
+func openILinkTime(value time.Time) string {
+	if value.IsZero() {
+		return "-"
+	}
+	return value.Format("2006-01-02 15:04")
+}
+
+func openILinkStatusLabel(status string) string {
+	labels := map[string]string{
+		"online": "在线", "offline": "离线", "pending": "等待中", "claimed": "执行中",
+		"running": "执行中", "succeeded": "成功", "success": "成功", "failed": "失败",
+		"enabled": "已启用", "disabled": "已停用",
+	}
+	if label, ok := labels[strings.ToLower(strings.TrimSpace(status))]; ok {
+		return label
+	}
+	return openILinkValue(status)
 }
 
 func marshalOpenILinkReply(value interface{}) string {
