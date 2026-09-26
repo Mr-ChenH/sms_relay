@@ -76,23 +76,31 @@ export interface Dashboard {
 
 export interface AppriseService {
   id: string
+  type: 'apprise' | 'openilink'
   name: string
   baseUrl: string
   notifyTimeoutSeconds: number
   enabled: boolean
+  openilinkInboundEnabled: boolean
+  openilinkWebhookSecret: string
+  openilinkInstallationIds: string[]
+  openilinkCapabilities: string[]
   lastStatus: string
   lastMessage: string
   updatedAt: string
 }
 
 export interface CreateAppriseServiceRequest {
+  type: 'apprise' | 'openilink'
   name: string
   baseUrl: string
   notifyTimeoutSeconds: number
   enabled: boolean
+  openilinkInboundEnabled: boolean
+  openilinkWebhookSecret: string
+  openilinkInstallationIds: string[]
+  openilinkCapabilities: string[]
 }
-
-export type UpdateAppriseServiceRequest = CreateAppriseServiceRequest
 
 export interface AppriseTarget {
   id: string
@@ -100,6 +108,7 @@ export interface AppriseTarget {
   serviceName: string
   name: string
   configKey: string
+  recipient: string
   tags: string[]
   enabled: boolean
   titleTemplate: string
@@ -112,6 +121,7 @@ export interface CreateAppriseTargetRequest {
   serviceId: string
   name: string
   configKey: string
+  recipient: string
   tags: string[]
   enabled: boolean
   titleTemplate: string

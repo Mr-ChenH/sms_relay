@@ -109,6 +109,42 @@ Default Web address: `http://localhost:5173`.
 
 The Vite dev server proxies `/api` to `http://localhost:8080`.
 
+## Bidirectional OpeniLink Hub Integration
+
+SMS Hub supports both directions without a separate Apprise deployment:
+
+- SMS Hub -> OpeniLink: routed SMS notifications are sent to WeChat through `POST /bot/v1/apprise`.
+- OpeniLink -> SMS Hub: signed App command webhooks invoke explicitly enabled SMS Hub tools.
+
+### Available Tools
+
+| Tool / Slash command | Behavior | Risk |
+| --- | --- | --- |
+| `get_overview` | Dashboard totals, recent SMS, failures, and running tasks | Read only |
+| `list_devices` | Terminal connectivity, SIM/eSIM, carrier, signal, and last seen | Read only |
+| `search_sms` | Search stored SMS messages, up to 20 results per call | Read only |
+| `list_esim_profiles` | List eSIM Profiles for one terminal | Read only |
+| `get_command_status` | Read the result of a queued terminal command | Read only |
+| `send_sms` | Queue an outbound SMS; may incur carrier charges | Write |
+| `refresh_device_status` | Queue a terminal status refresh | Write |
+| `switch_esim_profile` | Enable another eSIM Profile and interrupt cellular connectivity | High-risk write |
+
+Each tool is independently selectable in the notification service. Disabled tools are rejected even if an old Tool definition remains in OpeniLink Hub.
+
+### Setup
+
+1. Set `SMS_HUB_PUBLIC_BASE_URL` to an address reachable from the OpeniLink Hub process. The generated webhook URL is `{SMS_HUB_PUBLIC_BASE_URL}/api/integrations/openilink/webhook`.
+2. In OpeniLink Hub, bind and connect the destination Bot. Create a local App with scopes `message:write` and `tools:write`, and set its Webhook URL to the URL shown by SMS Hub. Install the App to the Bot after setting the scopes.
+3. Copy the App's Webhook Secret, plus the installation's Installation ID and App Token from OpeniLink Hub.
+4. In SMS Hub -> **消息分发**, create or edit an **OpeniLink Hub** service. Enter the Hub origin such as `http://openilink-hub:9800`, enable reverse control, enter the Webhook Secret, allow the Installation ID, and select the exposed tools.
+5. Add an OpeniLink Target under that service using the installation App Token. The recipient can be omitted when the OpeniLink installation has a default recipient.
+6. Click **同步 Tools** on the Target, then verify the App Webhook URL in OpeniLink Hub. The commands and AI Tool schemas are now registered for that installation.
+7. Test `/list_devices` in WeChat before enabling write tools such as `/send_sms` or `/switch_esim_profile`.
+
+OpeniLink webhook requests are accepted only when their HMAC-SHA256 signature is valid, the timestamp is within five minutes, and the Installation ID is in the service allowlist. Event results are cached for 24 hours so OpeniLink retries do not create duplicate SMS or eSIM commands.
+
+When both applications run in Docker, use a shared Docker network and service names where possible. `localhost` inside either container refers to that container itself. OpeniLink outbound messages also require a connected Bot and a current context token for the selected recipient; HTTP `409` means the recipient needs to message the Bot again or the recipient ID is incorrect.
+
 ## Current Scope
 
 This is the first runnable skeleton based on the project-factory design:

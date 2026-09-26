@@ -9,6 +9,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"sms-forwarding/server/api/internal/firmware"
@@ -26,6 +27,8 @@ type Server struct {
 	publicMQTTBroker string
 	lpaRunner        *lpa.Runner
 	firmware         *firmware.Repository
+	openILinkMu      sync.Mutex
+	openILinkReplies map[string]openILinkCachedReply
 }
 
 func New(s *store.Store, notifier *notify.Client, runners ...*lpa.Runner) *Server {
@@ -34,7 +37,7 @@ func New(s *store.Store, notifier *notify.Client, runners ...*lpa.Runner) *Serve
 		firmwareDir = "/data/firmware"
 	}
 	firmwareRepo, _ := firmware.NewRepository(firmwareDir)
-	server := &Server{store: s, notifier: notifier, publicBaseURL: strings.TrimRight(strings.TrimSpace(os.Getenv("SMS_HUB_PUBLIC_BASE_URL")), "/"), publicMQTTBroker: strings.TrimSpace(os.Getenv("SMS_HUB_PUBLIC_MQTT_BROKER")), firmware: firmwareRepo}
+	server := &Server{store: s, notifier: notifier, publicBaseURL: strings.TrimRight(strings.TrimSpace(os.Getenv("SMS_HUB_PUBLIC_BASE_URL")), "/"), publicMQTTBroker: strings.TrimSpace(os.Getenv("SMS_HUB_PUBLIC_MQTT_BROKER")), firmware: firmwareRepo, openILinkReplies: make(map[string]openILinkCachedReply)}
 	if len(runners) > 0 {
 		server.lpaRunner = runners[0]
 	}
@@ -47,6 +50,7 @@ func New(s *store.Store, notifier *notify.Client, runners ...*lpa.Runner) *Serve
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/health", s.health)
+	mux.HandleFunc("POST /api/integrations/openilink/webhook", s.openILinkWebhook)
 
 	mux.HandleFunc("GET /api/admin/dashboard", s.dashboard)
 	mux.HandleFunc("GET /api/admin/public-config", s.publicConfig)
@@ -71,6 +75,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("PUT /api/admin/apprise-targets/{id}", s.updateAppriseTarget)
 	mux.HandleFunc("DELETE /api/admin/apprise-targets/{id}", s.deleteAppriseTarget)
 	mux.HandleFunc("POST /api/admin/notify-test", s.notifyTest)
+	mux.HandleFunc("POST /api/admin/openilink-targets/{id}/sync-tools", s.syncOpenILinkTools)
 	mux.HandleFunc("GET /api/admin/routing-rules", s.rules)
 	mux.HandleFunc("POST /api/admin/routing-rules", s.createRule)
 	mux.HandleFunc("PUT /api/admin/routing-rules/{id}", s.updateRule)
@@ -430,7 +435,7 @@ func (s *Server) notifyTest(w http.ResponseWriter, r *http.Request) {
 	}
 	body := firstNonEmpty(req.Body, "SMS Hub Apprise test")
 	title := firstNonEmpty(req.Title, "SMS Hub 测试通知")
-	result := s.notifier.NotifyAt(r.Context(), service.BaseURL, time.Duration(service.NotifyTimeoutSeconds)*time.Second, notify.Message{Key: target.ConfigKey, Tag: strings.Join(target.Tags, ","), Title: title, Body: body, Type: "info"})
+	result := s.notifyTarget(r.Context(), service, target, title, body, strings.Join(target.Tags, ","))
 	status := "success"
 	if !result.OK {
 		status = "failed"
@@ -616,7 +621,7 @@ func (s *Server) dispatchSMS(parent context.Context, sms model.SMSMessage) []mod
 			continue
 		}
 		title, body, tag := store.RenderAppriseMessage(target, sms)
-		result := s.notifier.NotifyAt(parent, service.BaseURL, time.Duration(service.NotifyTimeoutSeconds)*time.Second, notify.Message{Key: target.ConfigKey, Tag: tag, Title: title, Body: body, Type: "info"})
+		result := s.notifyTarget(parent, service, target, title, body, tag)
 		status := "success"
 		if !result.OK {
 			status = "failed"
@@ -625,6 +630,15 @@ func (s *Server) dispatchSMS(parent context.Context, sms model.SMSMessage) []mod
 		results = append(results, model.NotifyResult{TargetID: target.ID, TargetName: target.Name, OK: result.OK, StatusCode: result.StatusCode, Message: result.Message})
 	}
 	return results
+}
+
+func (s *Server) notifyTarget(ctx context.Context, service model.AppriseService, target model.AppriseTarget, title, body, tag string) notify.Result {
+	message := notify.Message{Key: target.ConfigKey, Recipient: target.Recipient, Tag: tag, Title: title, Body: body, Type: "info"}
+	timeout := time.Duration(service.NotifyTimeoutSeconds) * time.Second
+	if strings.EqualFold(service.Type, "openilink") {
+		return s.notifier.NotifyOpenILinkAt(ctx, service.BaseURL, timeout, message)
+	}
+	return s.notifier.NotifyAt(ctx, service.BaseURL, timeout, message)
 }
 
 func firstNonEmpty(values ...string) string {

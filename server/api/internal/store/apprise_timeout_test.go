@@ -1,6 +1,7 @@
 package store
 
 import (
+	"strings"
 	"testing"
 
 	"sms-forwarding/server/api/internal/model"
@@ -26,6 +27,62 @@ func TestAppriseServiceNotificationTimeout(t *testing.T) {
 	}
 	if updated.NotifyTimeoutSeconds != 15 {
 		t.Fatalf("legacy/default timeout = %d, want 15", updated.NotifyTimeoutSeconds)
+	}
+}
+
+func TestOpenILinkServiceAndTargetConfiguration(t *testing.T) {
+	s := newEsimTaskTestStore(t)
+	service, err := s.CreateAppriseService(model.CreateAppriseServiceRequest{
+		Type: "openilink", Name: "WeChat", BaseURL: "http://openilink-hub:9800/", Enabled: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if service.Type != "openilink" || service.BaseURL != "http://openilink-hub:9800" {
+		t.Fatalf("service = %+v", service)
+	}
+
+	target, err := s.CreateAppriseTarget(model.CreateAppriseTargetRequest{
+		ServiceID: service.ID, Name: "Family", ConfigKey: "app-token", Recipient: "user@im.wechat", Enabled: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if target.Recipient != "user@im.wechat" {
+		t.Fatalf("recipient = %q", target.Recipient)
+	}
+	if target.Description != "WeChat / OpeniLink / recipient: user@im.wechat" {
+		t.Fatalf("description = %q", target.Description)
+	}
+	if strings.Contains(target.Description, "app-token") {
+		t.Fatal("target description leaks the OpeniLink app token")
+	}
+}
+
+func TestOpenILinkInboundConfigurationRequiresSecurityFields(t *testing.T) {
+	s := newEsimTaskTestStore(t)
+	_, err := s.CreateAppriseService(model.CreateAppriseServiceRequest{
+		Type: "openilink", Name: "WeChat", BaseURL: "http://openilink-hub:9800", Enabled: true,
+		OpenILinkInboundEnabled: true,
+	})
+	if err == nil || !strings.Contains(err.Error(), "webhook secret") {
+		t.Fatalf("error = %v", err)
+	}
+
+	service, err := s.CreateAppriseService(model.CreateAppriseServiceRequest{
+		Type: "openilink", Name: "WeChat", BaseURL: "http://openilink-hub:9800", Enabled: true,
+		OpenILinkInboundEnabled: true, OpenILinkWebhookSecret: "secret",
+		OpenILinkInstallationIDs: []string{" inst-1 ", "inst-1"},
+		OpenILinkCapabilities:    []string{"send_sms", "unknown", "get_overview"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(service.OpenILinkInstallationIDs) != 1 || len(service.OpenILinkCapabilities) != 2 {
+		t.Fatalf("service = %+v", service)
+	}
+	if service.OpenILinkCapabilities[0] != "get_overview" || service.OpenILinkCapabilities[1] != "send_sms" {
+		t.Fatalf("capabilities = %#v", service.OpenILinkCapabilities)
 	}
 }
 

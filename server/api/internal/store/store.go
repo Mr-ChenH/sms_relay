@@ -103,7 +103,18 @@ func (s *Store) initSQLite(ctx context.Context) error {
 	s.sms = state.SMS
 	s.appriseServices = state.AppriseServices
 	for i := range s.appriseServices {
+		s.appriseServices[i].Type = normalizeNotificationServiceType(s.appriseServices[i].Type)
 		s.appriseServices[i].NotifyTimeoutSeconds = normalizeNotifyTimeout(s.appriseServices[i].NotifyTimeoutSeconds)
+		if s.appriseServices[i].Type == "openilink" {
+			s.appriseServices[i].OpenILinkWebhookSecret = strings.TrimSpace(s.appriseServices[i].OpenILinkWebhookSecret)
+			s.appriseServices[i].OpenILinkInstallationIDs = cleanStrings(s.appriseServices[i].OpenILinkInstallationIDs)
+			s.appriseServices[i].OpenILinkCapabilities = normalizeOpenILinkCapabilities(s.appriseServices[i].OpenILinkCapabilities)
+		} else {
+			s.appriseServices[i].OpenILinkInboundEnabled = false
+			s.appriseServices[i].OpenILinkWebhookSecret = ""
+			s.appriseServices[i].OpenILinkInstallationIDs = nil
+			s.appriseServices[i].OpenILinkCapabilities = nil
+		}
 	}
 	s.appriseTargets = state.AppriseTargets
 	s.rules = state.Rules
@@ -296,7 +307,18 @@ func (s *Store) CreateAppriseService(req model.CreateAppriseServiceRequest) (mod
 	if !strings.HasPrefix(baseURL, "http://") && !strings.HasPrefix(baseURL, "https://") {
 		return model.AppriseService{}, errors.New("baseUrl must start with http:// or https://")
 	}
-	service := model.AppriseService{ID: s.nextIDStringLocked("apprise-service"), Name: name, BaseURL: baseURL, NotifyTimeoutSeconds: normalizeNotifyTimeout(req.NotifyTimeoutSeconds), Enabled: req.Enabled, LastStatus: "not_tested", LastMessage: "配置已保存，尚未测试连接", UpdatedAt: time.Now()}
+	serviceType := normalizeNotificationServiceType(req.Type)
+	inboundEnabled, webhookSecret, installationIDs, capabilities, err := normalizeOpenILinkSettings(serviceType, req)
+	if err != nil {
+		return model.AppriseService{}, err
+	}
+	service := model.AppriseService{
+		ID: s.nextIDStringLocked("apprise-service"), Type: serviceType, Name: name, BaseURL: baseURL,
+		NotifyTimeoutSeconds: normalizeNotifyTimeout(req.NotifyTimeoutSeconds), Enabled: req.Enabled,
+		OpenILinkInboundEnabled: inboundEnabled, OpenILinkWebhookSecret: webhookSecret,
+		OpenILinkInstallationIDs: installationIDs, OpenILinkCapabilities: capabilities,
+		LastStatus: "not_tested", LastMessage: "配置已保存，尚未测试连接", UpdatedAt: time.Now(),
+	}
 	s.appriseServices = append(s.appriseServices, service)
 	s.audit = append([]model.AuditLog{{ID: s.nextIDStringLocked("audit"), Actor: "admin", DeviceName: "-", Action: "create_apprise_service", ParameterSummary: service.Name + " / " + service.BaseURL, Result: "success", CreatedAt: time.Now()}}, s.audit...)
 	return service, nil
@@ -318,12 +340,22 @@ func (s *Store) UpdateAppriseService(id string, req model.UpdateAppriseServiceRe
 	if !strings.HasPrefix(baseURL, "http://") && !strings.HasPrefix(baseURL, "https://") {
 		return model.AppriseService{}, errors.New("baseUrl must start with http:// or https://")
 	}
+	serviceType := normalizeNotificationServiceType(req.Type)
+	inboundEnabled, webhookSecret, installationIDs, capabilities, err := normalizeOpenILinkSettings(serviceType, req)
+	if err != nil {
+		return model.AppriseService{}, err
+	}
 	for i := range s.appriseServices {
 		if s.appriseServices[i].ID == id {
+			s.appriseServices[i].Type = serviceType
 			s.appriseServices[i].Name = name
 			s.appriseServices[i].BaseURL = baseURL
 			s.appriseServices[i].NotifyTimeoutSeconds = normalizeNotifyTimeout(req.NotifyTimeoutSeconds)
 			s.appriseServices[i].Enabled = req.Enabled
+			s.appriseServices[i].OpenILinkInboundEnabled = inboundEnabled
+			s.appriseServices[i].OpenILinkWebhookSecret = webhookSecret
+			s.appriseServices[i].OpenILinkInstallationIDs = installationIDs
+			s.appriseServices[i].OpenILinkCapabilities = capabilities
 			s.appriseServices[i].LastStatus = "not_tested"
 			s.appriseServices[i].LastMessage = "配置已保存，尚未测试连接"
 			s.appriseServices[i].UpdatedAt = time.Now()
@@ -423,12 +455,13 @@ func (s *Store) CreateAppriseTarget(req model.CreateAppriseTargetRequest) (model
 		ServiceName:   service.Name,
 		Name:          name,
 		ConfigKey:     configKey,
+		Recipient:     strings.TrimSpace(req.Recipient),
 		Tags:          tags,
 		Enabled:       req.Enabled,
 		TitleTemplate: firstNonEmpty(req.TitleTemplate, "短信来自 {{sender}}"),
 		BodyTemplate:  firstNonEmpty(req.BodyTemplate, "{{body}}\n\n终端: {{device}}\n时间: {{timestamp}}"),
 		LastStatus:    "not_tested",
-		Description:   fmt.Sprintf("%s / key: %s / tag: %s", service.Name, configKey, firstNonEmpty(strings.Join(tags, ","), "all")),
+		Description:   notificationTargetDescription(service, configKey, strings.TrimSpace(req.Recipient), tags),
 	}
 	s.appriseTargets = append(s.appriseTargets, target)
 	s.audit = append([]model.AuditLog{{ID: s.nextIDStringLocked("audit"), Actor: "admin", DeviceName: "-", Action: "create_apprise_target", ParameterSummary: target.Name, Result: "success", CreatedAt: time.Now()}}, s.audit...)
@@ -459,11 +492,12 @@ func (s *Store) UpdateAppriseTarget(targetID string, req model.CreateAppriseTarg
 			s.appriseTargets[i].ServiceName = service.Name
 			s.appriseTargets[i].Name = name
 			s.appriseTargets[i].ConfigKey = configKey
+			s.appriseTargets[i].Recipient = strings.TrimSpace(req.Recipient)
 			s.appriseTargets[i].Tags = tags
 			s.appriseTargets[i].Enabled = req.Enabled
 			s.appriseTargets[i].TitleTemplate = firstNonEmpty(req.TitleTemplate, "短信来自 {{sender}}")
 			s.appriseTargets[i].BodyTemplate = firstNonEmpty(req.BodyTemplate, "{{body}}\n\n终端: {{device}}\n时间: {{timestamp}}")
-			s.appriseTargets[i].Description = fmt.Sprintf("%s / key: %s / tag: %s", service.Name, configKey, firstNonEmpty(strings.Join(tags, ","), "all"))
+			s.appriseTargets[i].Description = notificationTargetDescription(service, configKey, strings.TrimSpace(req.Recipient), tags)
 			s.audit = append([]model.AuditLog{{ID: s.nextIDStringLocked("audit"), Actor: "admin", DeviceName: "-", Action: "update_apprise_target", ParameterSummary: name, Result: "success", CreatedAt: time.Now()}}, s.audit...)
 			return s.appriseTargets[i], nil
 		}
@@ -1434,10 +1468,25 @@ func (s *Store) Commands() []model.DeviceCommand {
 }
 
 func (s *Store) CreateDeviceCommand(req model.CreateDeviceCommandRequest) (model.DeviceCommand, error) {
+	return s.createDeviceCommand(req, "")
+}
+
+func (s *Store) CreateDeviceCommandFromSource(req model.CreateDeviceCommandRequest, sourceEventID string) (model.DeviceCommand, error) {
+	return s.createDeviceCommand(req, strings.TrimSpace(sourceEventID))
+}
+
+func (s *Store) createDeviceCommand(req model.CreateDeviceCommandRequest, sourceEventID string) (model.DeviceCommand, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	defer s.persistLocked()
 
+	if sourceEventID != "" {
+		for _, command := range s.commands {
+			if command.SourceEventID == sourceEventID {
+				return command, nil
+			}
+		}
+	}
 	device, ok := s.findDeviceLocked(req.DeviceID)
 	if !ok {
 		return model.DeviceCommand{}, errors.New("device not found")
@@ -1450,32 +1499,56 @@ func (s *Store) CreateDeviceCommand(req model.CreateDeviceCommandRequest) (model
 	if payload == nil {
 		payload = map[string]interface{}{}
 	}
-	cmd := model.DeviceCommand{ID: s.nextIDStringLocked("cmd"), DeviceID: device.ID, Type: cmdType, Payload: payload, Status: "pending", CreatedAt: time.Now()}
+	cmd := model.DeviceCommand{ID: s.nextIDStringLocked("cmd"), SourceEventID: sourceEventID, DeviceID: device.ID, Type: cmdType, Payload: payload, Status: "pending", CreatedAt: time.Now()}
 	s.commands = append(s.commands, cmd)
-	s.audit = append([]model.AuditLog{{ID: s.nextIDStringLocked("audit"), CommandID: cmd.ID, Actor: "admin", DeviceName: device.Name, Action: cmdType, ParameterSummary: summarizePayload(payload), Result: "pending", CreatedAt: time.Now()}}, s.audit...)
+	actor := "admin"
+	if sourceEventID != "" {
+		actor = "openilink"
+	}
+	s.audit = append([]model.AuditLog{{ID: s.nextIDStringLocked("audit"), CommandID: cmd.ID, Actor: actor, DeviceName: device.Name, Action: cmdType, ParameterSummary: summarizePayload(payload), Result: "pending", CreatedAt: time.Now()}}, s.audit...)
 	s.notifyCommandCreatedLocked(cmd, device)
 	return cmd, nil
 }
 
 func (s *Store) CreateSendSMSTask(req model.SendSMSRequest) (model.CommandResult, error) {
+	return s.createSendSMSTask(req, "")
+}
+
+func (s *Store) CreateSendSMSTaskFromSource(req model.SendSMSRequest, sourceEventID string) (model.CommandResult, error) {
+	return s.createSendSMSTask(req, strings.TrimSpace(sourceEventID))
+}
+
+func (s *Store) createSendSMSTask(req model.SendSMSRequest, sourceEventID string) (model.CommandResult, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	defer s.persistLocked()
 
+	if sourceEventID != "" {
+		for _, command := range s.commands {
+			if command.SourceEventID == sourceEventID {
+				return model.CommandResult{CommandID: command.ID, Status: command.Status, Message: "发送短信任务已存在"}, nil
+			}
+		}
+	}
 	device, ok := s.findDeviceLocked(req.DeviceID)
 	if !ok {
 		return model.CommandResult{}, errors.New("device not found")
 	}
 	cmd := model.DeviceCommand{
-		ID:        s.nextIDStringLocked("cmd"),
-		DeviceID:  device.ID,
-		Type:      "send_sms",
-		Payload:   map[string]interface{}{"phone": req.Phone, "body": req.Body},
-		Status:    "pending",
-		CreatedAt: time.Now(),
+		ID:            s.nextIDStringLocked("cmd"),
+		SourceEventID: sourceEventID,
+		DeviceID:      device.ID,
+		Type:          "send_sms",
+		Payload:       map[string]interface{}{"phone": req.Phone, "body": req.Body},
+		Status:        "pending",
+		CreatedAt:     time.Now(),
 	}
 	s.commands = append(s.commands, cmd)
-	s.audit = append([]model.AuditLog{{ID: s.nextIDStringLocked("audit"), CommandID: cmd.ID, Actor: "admin", DeviceName: device.Name, Action: "send_sms", ParameterSummary: maskPhone(req.Phone), Result: "pending", CreatedAt: time.Now()}}, s.audit...)
+	actor := "admin"
+	if sourceEventID != "" {
+		actor = "openilink"
+	}
+	s.audit = append([]model.AuditLog{{ID: s.nextIDStringLocked("audit"), CommandID: cmd.ID, Actor: actor, DeviceName: device.Name, Action: "send_sms", ParameterSummary: maskPhone(req.Phone), Result: "pending", CreatedAt: time.Now()}}, s.audit...)
 	s.notifyCommandCreatedLocked(cmd, device)
 	return model.CommandResult{CommandID: cmd.ID, Status: cmd.Status, Message: "发送短信任务已创建，等待终端领取"}, nil
 }
@@ -2041,6 +2114,66 @@ func normalizeSubscriptionType(value string) string {
 	default:
 		return "recharge"
 	}
+}
+
+var openILinkCapabilityOrder = []string{
+	"get_overview",
+	"list_devices",
+	"search_sms",
+	"list_esim_profiles",
+	"get_command_status",
+	"send_sms",
+	"refresh_device_status",
+	"switch_esim_profile",
+}
+
+func normalizeOpenILinkSettings(serviceType string, req model.CreateAppriseServiceRequest) (bool, string, []string, []string, error) {
+	if serviceType != "openilink" {
+		return false, "", nil, nil, nil
+	}
+	secret := strings.TrimSpace(req.OpenILinkWebhookSecret)
+	installationIDs := cleanStrings(req.OpenILinkInstallationIDs)
+	capabilities := normalizeOpenILinkCapabilities(req.OpenILinkCapabilities)
+	if req.OpenILinkInboundEnabled {
+		if secret == "" {
+			return false, "", nil, nil, errors.New("OpeniLink webhook secret is required when inbound control is enabled")
+		}
+		if len(installationIDs) == 0 {
+			return false, "", nil, nil, errors.New("at least one OpeniLink installation ID is required")
+		}
+		if len(capabilities) == 0 {
+			return false, "", nil, nil, errors.New("at least one OpeniLink capability is required")
+		}
+	}
+	return req.OpenILinkInboundEnabled, secret, installationIDs, capabilities, nil
+}
+
+func normalizeOpenILinkCapabilities(values []string) []string {
+	requested := make(map[string]bool, len(values))
+	for _, value := range values {
+		requested[strings.ToLower(strings.TrimSpace(value))] = true
+	}
+	out := make([]string, 0, len(requested))
+	for _, capability := range openILinkCapabilityOrder {
+		if requested[capability] {
+			out = append(out, capability)
+		}
+	}
+	return out
+}
+
+func normalizeNotificationServiceType(value string) string {
+	if strings.EqualFold(strings.TrimSpace(value), "openilink") {
+		return "openilink"
+	}
+	return "apprise"
+}
+
+func notificationTargetDescription(service model.AppriseService, configKey, recipient string, tags []string) string {
+	if normalizeNotificationServiceType(service.Type) == "openilink" {
+		return fmt.Sprintf("%s / OpeniLink / recipient: %s", service.Name, firstNonEmpty(recipient, "installation default"))
+	}
+	return fmt.Sprintf("%s / key: %s / tag: %s", service.Name, configKey, firstNonEmpty(strings.Join(tags, ","), "all"))
 }
 
 func normalizeNotifyTimeout(seconds int) int {

@@ -66,21 +66,31 @@ type SMSList struct {
 }
 
 type AppriseService struct {
-	ID                   string    `json:"id"`
-	Name                 string    `json:"name"`
-	BaseURL              string    `json:"baseUrl"`
-	NotifyTimeoutSeconds int       `json:"notifyTimeoutSeconds"`
-	Enabled              bool      `json:"enabled"`
-	LastStatus           string    `json:"lastStatus"`
-	LastMessage          string    `json:"lastMessage"`
-	UpdatedAt            time.Time `json:"updatedAt"`
+	ID                       string    `json:"id"`
+	Type                     string    `json:"type"`
+	Name                     string    `json:"name"`
+	BaseURL                  string    `json:"baseUrl"`
+	NotifyTimeoutSeconds     int       `json:"notifyTimeoutSeconds"`
+	Enabled                  bool      `json:"enabled"`
+	OpenILinkInboundEnabled  bool      `json:"openilinkInboundEnabled"`
+	OpenILinkWebhookSecret   string    `json:"openilinkWebhookSecret"`
+	OpenILinkInstallationIDs []string  `json:"openilinkInstallationIds"`
+	OpenILinkCapabilities    []string  `json:"openilinkCapabilities"`
+	LastStatus               string    `json:"lastStatus"`
+	LastMessage              string    `json:"lastMessage"`
+	UpdatedAt                time.Time `json:"updatedAt"`
 }
 
 type CreateAppriseServiceRequest struct {
-	Name                 string `json:"name"`
-	BaseURL              string `json:"baseUrl"`
-	NotifyTimeoutSeconds int    `json:"notifyTimeoutSeconds"`
-	Enabled              bool   `json:"enabled"`
+	Type                     string   `json:"type"`
+	Name                     string   `json:"name"`
+	BaseURL                  string   `json:"baseUrl"`
+	NotifyTimeoutSeconds     int      `json:"notifyTimeoutSeconds"`
+	Enabled                  bool     `json:"enabled"`
+	OpenILinkInboundEnabled  bool     `json:"openilinkInboundEnabled"`
+	OpenILinkWebhookSecret   string   `json:"openilinkWebhookSecret"`
+	OpenILinkInstallationIDs []string `json:"openilinkInstallationIds"`
+	OpenILinkCapabilities    []string `json:"openilinkCapabilities"`
 }
 
 type UpdateAppriseServiceRequest = CreateAppriseServiceRequest
@@ -91,6 +101,7 @@ type AppriseTarget struct {
 	ServiceName   string   `json:"serviceName"`
 	Name          string   `json:"name"`
 	ConfigKey     string   `json:"configKey"`
+	Recipient     string   `json:"recipient"`
 	Tags          []string `json:"tags"`
 	Enabled       bool     `json:"enabled"`
 	TitleTemplate string   `json:"titleTemplate"`
@@ -103,6 +114,7 @@ type CreateAppriseTargetRequest struct {
 	ServiceID     string   `json:"serviceId"`
 	Name          string   `json:"name"`
 	ConfigKey     string   `json:"configKey"`
+	Recipient     string   `json:"recipient"`
 	Tags          []string `json:"tags"`
 	Enabled       bool     `json:"enabled"`
 	TitleTemplate string   `json:"titleTemplate"`
@@ -320,15 +332,16 @@ type NotifyResult struct {
 }
 
 type DeviceCommand struct {
-	ID          string                 `json:"id"`
-	DeviceID    string                 `json:"deviceId"`
-	Type        string                 `json:"type"`
-	Payload     map[string]interface{} `json:"payload"`
-	Status      string                 `json:"status"`
-	Result      string                 `json:"result,omitempty"`
-	CreatedAt   time.Time              `json:"createdAt"`
-	ClaimedAt   *time.Time             `json:"claimedAt,omitempty"`
-	CompletedAt *time.Time             `json:"completedAt,omitempty"`
+	ID            string                 `json:"id"`
+	SourceEventID string                 `json:"sourceEventId,omitempty"`
+	DeviceID      string                 `json:"deviceId"`
+	Type          string                 `json:"type"`
+	Payload       map[string]interface{} `json:"payload"`
+	Status        string                 `json:"status"`
+	Result        string                 `json:"result,omitempty"`
+	CreatedAt     time.Time              `json:"createdAt"`
+	ClaimedAt     *time.Time             `json:"claimedAt,omitempty"`
+	CompletedAt   *time.Time             `json:"completedAt,omitempty"`
 }
 
 type CreateDeviceCommandRequest struct {

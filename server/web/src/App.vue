@@ -10,7 +10,7 @@ import LogsPage from './pages/LogsPage.vue'
 import OverviewPage from './pages/OverviewPage.vue'
 import SendSmsPage from './pages/SendSmsPage.vue'
 import ToolsPage from './pages/ToolsPage.vue'
-import type { AppriseService, AppriseTarget, AuditLog, CommandResult, CreateAppriseServiceRequest, CreateAppriseTargetRequest, CreateDeviceCommandRequest, CreateEsimSubscriptionRequest, CreateEsimTaskRequest, CreateRoutingRuleRequest, Dashboard, Device, DeviceCommand, EsimCapabilities, EsimOperationTask, EsimProfile, EsimSubscription, EsimTask, LogEntry, RoutingRule, SMSList, SMSMessage, Page } from './types'
+import type { AppriseService, AppriseTarget, AuditLog, CommandResult, CreateAppriseServiceRequest, CreateAppriseTargetRequest, CreateDeviceCommandRequest, CreateEsimSubscriptionRequest, CreateEsimTaskRequest, CreateRoutingRuleRequest, Dashboard, Device, DeviceCommand, EsimCapabilities, EsimOperationTask, EsimProfile, EsimSubscription, EsimTask, LogEntry, PublicConfig, RoutingRule, SMSList, SMSMessage, Page } from './types'
 import { formatLogTime, formatTime, statusClass } from './utils/ui'
 
 const page = ref<Page>('overview')
@@ -112,15 +112,40 @@ const appriseForm = ref({
   serviceId: '',
   name: '',
   configKey: 'default',
+  recipient: '',
   tagsText: 'all',
   enabled: true,
   titleTemplate: '短信来自 {{sender}}',
   bodyTemplate: '{{body}}\n\n终端: {{device}}\n时间: {{timestamp}}'
 })
 const appriseSaveResult = ref('')
-const appriseServiceForm = ref({ name: '备用 Apprise API', baseUrl: 'http://localhost:8000', notifyTimeoutSeconds: 15, enabled: true })
+const appriseSaveResultOK = ref(true)
+const openILinkCapabilityOptions = [
+  { value: 'get_overview', label: '查看总览' },
+  { value: 'list_devices', label: '终端列表' },
+  { value: 'search_sms', label: '检索短信' },
+  { value: 'list_esim_profiles', label: 'eSIM Profile' },
+  { value: 'get_command_status', label: '命令状态' },
+  { value: 'send_sms', label: '发送短信' },
+  { value: 'refresh_device_status', label: '刷新终端状态' },
+  { value: 'switch_esim_profile', label: '切换 eSIM Profile' }
+] as const
+const allOpenILinkCapabilities = openILinkCapabilityOptions.map((item) => item.value)
+const appriseServiceForm = ref({
+  type: 'apprise' as 'apprise' | 'openilink',
+  name: '备用 Apprise API',
+  baseUrl: 'http://localhost:8000',
+  notifyTimeoutSeconds: 15,
+  enabled: true,
+  openilinkInboundEnabled: false,
+  openilinkWebhookSecret: '',
+  openilinkInstallationIdsText: '',
+  openilinkCapabilities: [...allOpenILinkCapabilities] as string[]
+})
 const editingAppriseServiceId = ref('')
 const appriseServiceResult = ref('')
+const publicBaseURL = ref(window.location.origin)
+const openILinkWebhookURL = computed(() => `${publicBaseURL.value.replace(/\/$/, '')}/api/integrations/openilink/webhook`)
 const routingRuleForm = ref({ name: '', senderContains: '', bodyKeywordsText: '', deviceIds: [] as string[], tagsText: '', targetIds: [] as string[], enabled: true })
 const editingRoutingRuleId = ref('')
 const routingRuleResult = ref('')
@@ -179,13 +204,15 @@ async function loadSmsPage() {
 }
 
 async function loadRoutesPage() {
-  const [services, pushChannels, routeRules, auditRows, devs] = await Promise.all([
+  const [services, pushChannels, routeRules, auditRows, devs, publicConfig] = await Promise.all([
     api.get<AppriseService[]>('/api/admin/apprise-services'),
     api.get<AppriseTarget[]>('/api/admin/apprise-targets'),
     api.get<RoutingRule[]>('/api/admin/routing-rules'),
     api.get<AuditLog[]>('/api/admin/audit'),
-    api.get<Device[]>('/api/admin/devices')
+    api.get<Device[]>('/api/admin/devices'),
+    api.get<PublicConfig>('/api/admin/public-config')
   ])
+  publicBaseURL.value = publicConfig.apiBaseUrl || window.location.origin
   devices.value = devs
   applyDeviceDefaults(devs)
   appriseServices.value = services
@@ -599,10 +626,12 @@ async function createProfileCommand(profile: EsimProfile, type: string) {
 
 async function createAppriseTarget() {
   appriseSaveResult.value = ''
+  appriseSaveResultOK.value = true
   const payload: CreateAppriseTargetRequest = {
     serviceId: appriseForm.value.serviceId,
     name: appriseForm.value.name.trim(),
     configKey: appriseForm.value.configKey.trim(),
+    recipient: appriseForm.value.recipient.trim(),
     tags: appriseForm.value.tagsText.split(',').map((tag) => tag.trim()).filter(Boolean),
     enabled: appriseForm.value.enabled,
     titleTemplate: appriseForm.value.titleTemplate,
@@ -629,6 +658,7 @@ function editAppriseTarget(target: AppriseTarget) {
     serviceId: target.serviceId,
     name: target.name,
     configKey: target.configKey,
+    recipient: target.recipient || '',
     tagsText: target.tags.join(','),
     enabled: target.enabled,
     titleTemplate: target.titleTemplate,
@@ -640,7 +670,8 @@ function editAppriseTarget(target: AppriseTarget) {
 function resetAppriseTargetForm() {
   editingAppriseTargetId.value = ''
   appriseForm.value.name = ''
-  appriseForm.value.configKey = 'default'
+  appriseForm.value.configKey = isOpenILinkService(appriseForm.value.serviceId) ? '' : 'default'
+  appriseForm.value.recipient = ''
   appriseForm.value.tagsText = 'all'
   appriseForm.value.enabled = true
   appriseForm.value.titleTemplate = '短信来自 {{sender}}'
@@ -650,6 +681,7 @@ function resetAppriseTargetForm() {
 }
 
 async function deleteAppriseTarget(target: AppriseTarget) {
+  appriseSaveResultOK.value = true
   await api.delete<{ status: string }>(`/api/admin/apprise-targets/${target.id}`)
   channels.value = await api.get<AppriseTarget[]>('/api/admin/apprise-targets')
   audit.value = await api.get<AuditLog[]>('/api/admin/audit')
@@ -658,18 +690,24 @@ async function deleteAppriseTarget(target: AppriseTarget) {
 
 async function testAppriseTarget(target: AppriseTarget) {
   appriseSaveResult.value = ''
-  await api.post('/api/admin/notify-test', { targetId: target.id, title: 'SMS Hub test', body: 'Apprise target test' })
+  const result = await api.post<{ ok: boolean; message: string }>('/api/admin/notify-test', { targetId: target.id, title: 'SMS Hub test', body: 'Notification target test' })
   channels.value = await api.get<AppriseTarget[]>('/api/admin/apprise-targets')
-  appriseSaveResult.value = `已发送测试通知到 ${target.name}`
+  appriseSaveResultOK.value = result.ok
+  appriseSaveResult.value = result.ok ? `已发送测试通知到 ${target.name}` : `${target.name} 发送失败：${result.message}`
 }
 
 async function saveAppriseService() {
   appriseServiceResult.value = ''
   const payload: CreateAppriseServiceRequest = {
+    type: appriseServiceForm.value.type,
     name: appriseServiceForm.value.name.trim(),
     baseUrl: appriseServiceForm.value.baseUrl.trim(),
     notifyTimeoutSeconds: appriseServiceForm.value.notifyTimeoutSeconds,
-    enabled: appriseServiceForm.value.enabled
+    enabled: appriseServiceForm.value.enabled,
+    openilinkInboundEnabled: appriseServiceForm.value.type === 'openilink' && appriseServiceForm.value.openilinkInboundEnabled,
+    openilinkWebhookSecret: appriseServiceForm.value.openilinkWebhookSecret.trim(),
+    openilinkInstallationIds: appriseServiceForm.value.openilinkInstallationIdsText.split(',').map((value) => value.trim()).filter(Boolean),
+    openilinkCapabilities: appriseServiceForm.value.openilinkCapabilities
   }
   if (editingAppriseServiceId.value) {
     const service = await api.put<AppriseService>(`/api/admin/apprise-services/${editingAppriseServiceId.value}`, payload)
@@ -690,13 +728,27 @@ async function saveAppriseService() {
 
 function editAppriseService(service: AppriseService) {
   editingAppriseServiceId.value = service.id
-  appriseServiceForm.value = { name: service.name, baseUrl: service.baseUrl, notifyTimeoutSeconds: service.notifyTimeoutSeconds || 15, enabled: service.enabled }
+  appriseServiceForm.value = {
+    type: service.type || 'apprise',
+    name: service.name,
+    baseUrl: service.baseUrl,
+    notifyTimeoutSeconds: service.notifyTimeoutSeconds || 15,
+    enabled: service.enabled,
+    openilinkInboundEnabled: service.openilinkInboundEnabled || false,
+    openilinkWebhookSecret: service.openilinkWebhookSecret || '',
+    openilinkInstallationIdsText: (service.openilinkInstallationIds || []).join(','),
+    openilinkCapabilities: [...(service.openilinkCapabilities || allOpenILinkCapabilities)]
+  }
   showAppriseServiceForm.value = true
 }
 
 function resetAppriseServiceForm() {
   editingAppriseServiceId.value = ''
-  appriseServiceForm.value = { name: '备用 Apprise API', baseUrl: 'http://localhost:8000', notifyTimeoutSeconds: 15, enabled: true }
+  appriseServiceForm.value = {
+    type: 'apprise', name: '备用 Apprise API', baseUrl: 'http://localhost:8000', notifyTimeoutSeconds: 15, enabled: true,
+    openilinkInboundEnabled: false, openilinkWebhookSecret: '', openilinkInstallationIdsText: '',
+    openilinkCapabilities: [...allOpenILinkCapabilities]
+  }
   showAppriseServiceForm.value = false
 }
 
@@ -713,6 +765,18 @@ async function testAppriseService(serviceId: string) {
   const response = await api.post<{ service: AppriseService; result: { ok: boolean; message: string; statusCode: number } }>('/api/admin/apprise-services/test', { serviceId })
   appriseServices.value = appriseServices.value.map((item) => item.id === response.service.id ? response.service : item)
   appriseServiceResult.value = response.result.ok ? `${response.service.name} 连接成功` : `${response.service.name} 连接失败：${response.result.message}`
+}
+
+async function syncOpenILinkTools(target: AppriseTarget) {
+  appriseSaveResult.value = ''
+  try {
+    await api.post(`/api/admin/openilink-targets/${target.id}/sync-tools`, {})
+    appriseSaveResultOK.value = true
+    appriseSaveResult.value = `${target.name} 的 Slash 命令和 AI Tools 已同步到 OpeniLink Hub`
+  } catch (err) {
+    appriseSaveResultOK.value = false
+    appriseSaveResult.value = err instanceof Error ? `Tools 同步失败：${err.message}` : 'Tools 同步失败'
+  }
 }
 
 async function saveRoutingRule() {
@@ -759,6 +823,27 @@ function resetRoutingRuleForm() {
   editingRoutingRuleId.value = ''
   routingRuleForm.value = { name: '', senderContains: '', bodyKeywordsText: '', deviceIds: [], tagsText: '', targetIds: [], enabled: true }
   showRoutingRuleForm.value = false
+}
+
+function syncTargetServiceFields() {
+  if (isOpenILinkService(appriseForm.value.serviceId)) {
+    if (appriseForm.value.configKey === 'default') appriseForm.value.configKey = ''
+    return
+  }
+  if (!appriseForm.value.configKey) appriseForm.value.configKey = 'default'
+}
+
+function isOpenILinkService(serviceId: string) {
+  return appriseServices.value.find((service) => service.id === serviceId)?.type === 'openilink'
+}
+
+function isOpenILinkInboundEnabled(serviceId: string) {
+  const service = appriseServices.value.find((item) => item.id === serviceId)
+  return service?.type === 'openilink' && service.openilinkInboundEnabled
+}
+
+function notificationServiceLabel(service: AppriseService) {
+  return service.type === 'openilink' ? 'OpeniLink Hub' : 'Apprise API'
 }
 
 function routingRuleConditions(rule: RoutingRule) {
@@ -986,41 +1071,41 @@ onBeforeUnmount(() => {
 
         <section v-if="!loading && page === 'routes'" class="page routes-page">
           <div class="page-head">
-            <div><h1>消息分发</h1><p>管理 Apprise 服务、通知 Target 和短信路由规则。</p></div>
+            <div><h1>消息分发</h1><p>管理通知服务、发送目标和短信路由规则。</p></div>
             <div class="toolbar"><button class="btn" @click="showAppriseForm = true">新增 Target</button><button class="btn primary" @click="showRoutingRuleForm = true">新增规则</button></div>
           </div>
 
           <div class="grid cols-3 routes-metrics">
-            <div class="card metric"><span>Apprise 服务</span><b>{{ appriseServices.filter((item) => item.enabled).length }} / {{ appriseServices.length }}</b><small>已启用 / 全部</small></div>
+            <div class="card metric"><span>通知服务</span><b>{{ appriseServices.filter((item) => item.enabled).length }} / {{ appriseServices.length }}</b><small>已启用 / 全部</small></div>
             <div class="card metric"><span>通知 Target</span><b>{{ channels.filter((item) => item.enabled).length }} / {{ channels.length }}</b><small>已启用 / 全部</small></div>
             <div class="card metric"><span>路由规则</span><b>{{ rules.filter((item) => item.enabled).length }} / {{ rules.length }}</b><small>已启用 / 全部</small></div>
           </div>
 
           <div v-if="appriseServiceResult" class="alert success top-gap">{{ appriseServiceResult }}</div>
-          <div v-if="appriseSaveResult" class="alert success top-gap">{{ appriseSaveResult }}</div>
+          <div v-if="appriseSaveResult" :class="['alert', appriseSaveResultOK ? 'success' : 'danger', 'top-gap']">{{ appriseSaveResult }}</div>
           <div v-if="routingRuleResult" class="alert success top-gap">{{ routingRuleResult }}</div>
 
           <div class="grid routes-config-grid top-gap">
             <section class="card routes-panel">
-              <div class="card-head"><div><b>Apprise 服务</b><small>通知网关连接</small></div><button class="btn small" type="button" @click="showAppriseServiceForm = true">新增服务</button></div>
+              <div class="card-head"><div><b>通知服务</b><small>Apprise 或 OpeniLink Hub 连接</small></div><button class="btn small" type="button" @click="showAppriseServiceForm = true">新增服务</button></div>
               <div v-if="appriseServices.length" class="routes-item-list">
                 <div v-for="service in appriseServices" :key="service.id" class="routes-item">
-                  <div class="routes-item-main"><div class="routes-item-title"><b>{{ service.name }}</b><span :class="['status', service.lastStatus === 'success' ? 'ok' : service.lastStatus === 'failed' ? 'danger' : 'gray']">{{ service.enabled ? service.lastStatus : 'disabled' }}</span></div><small class="mono">{{ service.baseUrl }} · 超时 {{ service.notifyTimeoutSeconds || 15 }} 秒</small><small>{{ service.lastMessage || '尚未测试连接' }}</small></div>
+                  <div class="routes-item-main"><div class="routes-item-title"><b>{{ service.name }}</b><span class="status info">{{ notificationServiceLabel(service) }}</span><span :class="['status', service.lastStatus === 'success' ? 'ok' : service.lastStatus === 'failed' ? 'danger' : 'gray']">{{ service.enabled ? service.lastStatus : 'disabled' }}</span></div><small class="mono">{{ service.baseUrl }} · 超时 {{ service.notifyTimeoutSeconds || 15 }} 秒</small><small v-if="service.type === 'openilink'">反向控制：{{ service.openilinkInboundEnabled ? `${service.openilinkCapabilities.length} 项功能` : '关闭' }}</small><small>{{ service.lastMessage || '尚未测试连接' }}</small></div>
                   <div class="routes-item-actions"><button class="btn small" type="button" @click="testAppriseService(service.id)">测试</button><button class="btn small" type="button" @click="editAppriseService(service)">编辑</button><button class="btn small danger" type="button" @click="deleteAppriseService(service)">删除</button></div>
                 </div>
               </div>
-              <div v-else class="empty"><b>暂无 Apprise 服务</b><small>添加服务后才能创建并测试通知 Target。</small></div>
+              <div v-else class="empty"><b>暂无通知服务</b><small>添加 Apprise 或 OpeniLink Hub 后才能创建并测试通知 Target。</small></div>
             </section>
 
             <section class="card routes-panel">
               <div class="card-head"><div><b>通知 Target</b><small>具体接收渠道与模板</small></div><button class="btn small" type="button" :disabled="appriseServices.length === 0" @click="showAppriseForm = true">新增 Target</button></div>
               <div v-if="channels.length" class="routes-item-list">
                 <div v-for="ch in channels" :key="ch.id" class="routes-item">
-                  <div class="routes-item-main"><div class="routes-item-title"><b>{{ ch.name }}</b><span :class="['status', ch.lastStatus === 'success' ? 'ok' : ch.enabled ? 'warn' : 'gray']">{{ ch.enabled ? ch.lastStatus : 'disabled' }}</span></div><small>{{ ch.serviceName }} · key={{ ch.configKey }}</small><div class="tag-list"><span v-for="tag in ch.tags.length ? ch.tags : ['all']" :key="tag">{{ tag }}</span></div><small>{{ ch.description }}</small></div>
-                  <div class="routes-item-actions"><button class="btn small" type="button" @click="testAppriseTarget(ch)">测试</button><button class="btn small" type="button" @click="editAppriseTarget(ch)">编辑</button><button class="btn small danger" type="button" @click="deleteAppriseTarget(ch)">删除</button></div>
+                  <div class="routes-item-main"><div class="routes-item-title"><b>{{ ch.name }}</b><span :class="['status', ch.lastStatus === 'success' ? 'ok' : ch.enabled ? 'warn' : 'gray']">{{ ch.enabled ? ch.lastStatus : 'disabled' }}</span></div><small v-if="isOpenILinkService(ch.serviceId)">{{ ch.serviceName }} · OpeniLink{{ ch.recipient ? ` · ${ch.recipient}` : ' · 默认接收人' }}</small><small v-else>{{ ch.serviceName }} · key={{ ch.configKey }}</small><div v-if="!isOpenILinkService(ch.serviceId)" class="tag-list"><span v-for="tag in ch.tags.length ? ch.tags : ['all']" :key="tag">{{ tag }}</span></div><small>{{ ch.description }}</small></div>
+                  <div class="routes-item-actions"><button class="btn small" type="button" @click="testAppriseTarget(ch)">测试</button><button v-if="isOpenILinkInboundEnabled(ch.serviceId)" class="btn small" type="button" @click="syncOpenILinkTools(ch)">同步 Tools</button><button class="btn small" type="button" @click="editAppriseTarget(ch)">编辑</button><button class="btn small danger" type="button" @click="deleteAppriseTarget(ch)">删除</button></div>
                 </div>
               </div>
-              <div v-else class="empty"><b>暂无通知 Target</b><small>Target 用于关联 Apprise Config Key、标签和消息模板。</small></div>
+              <div v-else class="empty"><b>暂无通知 Target</b><small>Target 用于关联通知凭据、接收渠道和消息模板。</small></div>
             </section>
           </div>
 
@@ -1030,11 +1115,49 @@ onBeforeUnmount(() => {
           </section>
 
           <div v-if="showAppriseServiceForm" class="modal-backdrop">
-            <form class="card form modal" @submit.prevent="saveAppriseService"><div class="card-head"><div><b>{{ editingAppriseServiceId ? '编辑 Apprise 服务' : '新增 Apprise 服务' }}</b><small>配置自部署 Apprise API 地址</small></div><button class="btn small" type="button" @click="resetAppriseServiceForm">关闭</button></div><label>服务名称</label><input v-model="appriseServiceForm.name" class="field" placeholder="例如：主 Apprise API" required><label>Apprise API 地址</label><input v-model="appriseServiceForm.baseUrl" class="field" type="url" placeholder="http://localhost:8000" required><label>通知超时（秒）</label><input v-model.number="appriseServiceForm.notifyTimeoutSeconds" class="field" type="number" min="3" max="120" step="1" required><small>企业微信等渠道响应较慢时可适当增加，默认 15 秒。</small><label class="checkbox-row"><input v-model="appriseServiceForm.enabled" type="checkbox"> 启用通知分发</label><div class="toolbar"><button class="btn primary">{{ editingAppriseServiceId ? '保存修改' : '添加服务' }}</button><button class="btn" type="button" @click="resetAppriseServiceForm">取消</button></div></form>
+            <form class="card form modal" @submit.prevent="saveAppriseService">
+              <div class="card-head"><div><b>{{ editingAppriseServiceId ? '编辑通知服务' : '新增通知服务' }}</b><small>配置 Apprise API 或 OpeniLink Hub</small></div><button class="btn small" type="button" @click="resetAppriseServiceForm">关闭</button></div>
+              <label>服务类型</label>
+              <select v-model="appriseServiceForm.type" class="field"><option value="apprise">Apprise API</option><option value="openilink">OpeniLink Hub</option></select>
+              <label>服务名称</label><input v-model="appriseServiceForm.name" class="field" :placeholder="appriseServiceForm.type === 'openilink' ? '例如：家庭微信机器人' : '例如：主 Apprise API'" required>
+              <label>{{ appriseServiceForm.type === 'openilink' ? 'OpeniLink Hub 地址' : 'Apprise API 地址' }}</label><input v-model="appriseServiceForm.baseUrl" class="field" type="url" :placeholder="appriseServiceForm.type === 'openilink' ? 'http://openilink-hub:9800' : 'http://apprise:8000'" required>
+              <template v-if="appriseServiceForm.type === 'openilink'">
+                <label class="checkbox-row"><input v-model="appriseServiceForm.openilinkInboundEnabled" type="checkbox"> 启用 OpeniLink 反向控制</label>
+                <template v-if="appriseServiceForm.openilinkInboundEnabled">
+                  <label>Webhook URL</label><input class="field mono" :value="openILinkWebhookURL" readonly>
+                  <label>Webhook Secret</label><input v-model="appriseServiceForm.openilinkWebhookSecret" class="field" type="password" autocomplete="new-password" required>
+                  <label>允许的 Installation ID（逗号分隔）</label><input v-model="appriseServiceForm.openilinkInstallationIdsText" class="field" placeholder="inst_xxx" required>
+                  <label>开放功能</label>
+                  <div class="form-grid-2">
+                    <label v-for="capability in openILinkCapabilityOptions" :key="capability.value" class="checkbox-row"><input v-model="appriseServiceForm.openilinkCapabilities" type="checkbox" :value="capability.value"> {{ capability.label }}</label>
+                  </div>
+                </template>
+              </template>
+              <label>通知超时（秒）</label><input v-model.number="appriseServiceForm.notifyTimeoutSeconds" class="field" type="number" min="3" max="120" step="1" required><small>目标服务响应较慢时可适当增加，默认 15 秒。</small>
+              <label class="checkbox-row"><input v-model="appriseServiceForm.enabled" type="checkbox"> 启用通知分发</label>
+              <div class="toolbar"><button class="btn primary" :disabled="appriseServiceForm.type === 'openilink' && appriseServiceForm.openilinkInboundEnabled && appriseServiceForm.openilinkCapabilities.length === 0">{{ editingAppriseServiceId ? '保存修改' : '添加服务' }}</button><button class="btn" type="button" @click="resetAppriseServiceForm">取消</button></div>
+            </form>
           </div>
 
           <div v-if="showAppriseForm" class="modal-backdrop">
-            <form class="card form modal routes-target-modal" @submit.prevent="createAppriseTarget"><div class="card-head"><div><b>{{ editingAppriseTargetId ? '编辑 Apprise Target' : '新增 Apprise Target' }}</b><small>配置接收渠道与短信模板</small></div><button class="btn small" type="button" @click="resetAppriseTargetForm">关闭</button></div><div class="form-grid-2"><div class="form-section"><label>Apprise 服务</label><select v-model="appriseForm.serviceId" class="field" required><option v-for="service in appriseServices" :key="service.id" :value="service.id">{{ service.name }} / {{ service.baseUrl }}</option></select></div><div class="form-section"><label>名称</label><input v-model="appriseForm.name" class="field" placeholder="例如：Telegram 运维群" required></div><div class="form-section"><label>Config Key</label><input v-model="appriseForm.configKey" class="field" placeholder="default" required></div><div class="form-section"><label>Tags（逗号分隔）</label><input v-model="appriseForm.tagsText" class="field" placeholder="all,verification"></div></div><label>标题模板</label><input v-model="appriseForm.titleTemplate" class="field" placeholder="短信来自 {{sender}}"><label>内容模板</label><textarea v-model="appriseForm.bodyTemplate" placeholder="{{body}}"></textarea><small v-pre>可用变量：{{sender}}、{{body}}、{{device}}、{{timestamp}}</small><label class="checkbox-row"><input v-model="appriseForm.enabled" type="checkbox"> 启用 Target</label><div class="toolbar"><button class="btn primary">{{ editingAppriseTargetId ? '保存修改' : '保存 Target' }}</button><button class="btn" type="button" @click="resetAppriseTargetForm">取消</button></div></form>
+            <form class="card form modal routes-target-modal" @submit.prevent="createAppriseTarget">
+              <div class="card-head"><div><b>{{ editingAppriseTargetId ? '编辑通知 Target' : '新增通知 Target' }}</b><small>配置接收渠道与短信模板</small></div><button class="btn small" type="button" @click="resetAppriseTargetForm">关闭</button></div>
+              <div class="form-grid-2">
+                <div class="form-section"><label>通知服务</label><select v-model="appriseForm.serviceId" class="field" required @change="syncTargetServiceFields"><option v-for="service in appriseServices" :key="service.id" :value="service.id">{{ service.name }} / {{ notificationServiceLabel(service) }}</option></select></div>
+                <div class="form-section"><label>名称</label><input v-model="appriseForm.name" class="field" placeholder="例如：微信短信通知" required></div>
+                <template v-if="isOpenILinkService(appriseForm.serviceId)">
+                  <div class="form-section"><label>OpeniLink App Token</label><input v-model="appriseForm.configKey" class="field" type="password" autocomplete="new-password" placeholder="安装应用后生成的 App Token" required></div>
+                  <div class="form-section"><label>接收人</label><input v-model="appriseForm.recipient" class="field" placeholder="留空使用安装配置中的默认接收人"></div>
+                </template>
+                <template v-else>
+                  <div class="form-section"><label>Config Key</label><input v-model="appriseForm.configKey" class="field" placeholder="default" required></div>
+                  <div class="form-section"><label>Tags（逗号分隔）</label><input v-model="appriseForm.tagsText" class="field" placeholder="all,verification"></div>
+                </template>
+              </div>
+              <label>标题模板</label><input v-model="appriseForm.titleTemplate" class="field" placeholder="短信来自 {{sender}}"><label>内容模板</label><textarea v-model="appriseForm.bodyTemplate" placeholder="{{body}}"></textarea><small v-pre>可用变量：{{sender}}、{{body}}、{{device}}、{{timestamp}}</small>
+              <label class="checkbox-row"><input v-model="appriseForm.enabled" type="checkbox"> 启用 Target</label>
+              <div class="toolbar"><button class="btn primary">{{ editingAppriseTargetId ? '保存修改' : '保存 Target' }}</button><button class="btn" type="button" @click="resetAppriseTargetForm">取消</button></div>
+            </form>
           </div>
 
           <div v-if="showRoutingRuleForm" class="modal-backdrop" @click.self="resetRoutingRuleForm">
@@ -1127,7 +1250,7 @@ onBeforeUnmount(() => {
           <div class="page-head"><div><h1>订阅保活</h1><p>查看全部 eSIM 充值与短信保活策略。</p></div><button class="btn primary" @click="openEsimSubscriptionDialog">新增订阅策略</button></div>
           <div v-if="esimSubscriptionResult" class="alert success top-gap">{{ esimSubscriptionResult }}</div>
           <div class="card top-gap"><div class="card-head"><b>全部订阅保活</b><button class="btn small" @click="loadAll()">刷新</button></div><table><thead><tr><th>终端</th><th>号码 / Profile</th><th>国家/地区</th><th>策略类型</th><th>开始时间</th><th>执行周期</th><th>策略参数</th><th>提醒渠道</th><th>下次执行</th><th>状态</th><th>操作</th></tr></thead><tbody><tr v-for="sub in esimSubscriptions" :key="sub.id"><td><b>{{ sub.deviceName }}</b><small class="mono">{{ sub.deviceId }}</small></td><td><b>{{ sub.profileName }}</b><small class="mono">{{ sub.iccid }}</small><small>{{ sub.note || '-' }}</small></td><td>{{ sub.country || '-' }}</td><td>{{ sub.type === 'recharge' ? '充值提醒' : '短信保活' }}</td><td>{{ formatTime(sub.startAt) }}</td><td>{{ sub.intervalDays }} 天</td><td><template v-if="sub.type === 'recharge'">{{ sub.rechargeAmount || '-' }}</template><template v-else>{{ sub.keepaliveNumber || '-' }} / {{ sub.keepaliveMessage || '-' }}</template></td><td>{{ (sub.targetIds || []).map((id) => channels.find((target) => target.id === id)?.name || id).join('、') || '全部启用渠道（兼容）' }}</td><td>{{ formatTime(sub.nextRunAt) }}</td><td><span :class="['status', statusClass(sub.enabled ? sub.status : 'disabled')]">{{ sub.enabled ? sub.status : 'disabled' }}</span></td><td><div class="subscription-row-actions"><button class="btn small primary" @click="editEsimSubscription(sub)">编辑</button><button class="btn small danger" :disabled="deletingEsimSubscriptionId === sub.id" @click="deleteEsimSubscription(sub)">{{ deletingEsimSubscriptionId === sub.id ? '删除中' : '删除' }}</button></div></td></tr><tr v-if="esimSubscriptions.length === 0"><td colspan="11" class="muted">暂无订阅保活策略。</td></tr></tbody></table></div>
-          <div v-if="showEsimSubscriptionDialog" class="modal-backdrop"><form class="card form modal" @submit.prevent="saveEsimSubscription"><div class="card-head"><b>{{ editingEsimSubscriptionId ? '编辑订阅策略' : '新增订阅策略' }}</b><button class="btn small" type="button" @click="showEsimSubscriptionDialog = false">关闭</button></div><label>终端</label><select class="field" :value="subscriptionDialogDeviceId" :disabled="!!editingEsimSubscriptionId" @change="selectSubscriptionDialogDevice(($event.target as HTMLSelectElement).value)" required><option v-for="device in devices" :key="device.id" :value="device.id">{{ device.name }} / {{ device.eid }} / {{ device.status }}</option></select><label>号码 / Profile</label><select v-model="esimSubscriptionForm.profileId" class="field" :disabled="!!editingEsimSubscriptionId" required><option v-for="profile in editingEsimSubscriptionId ? subscriptionDialogProfiles : availableSubscriptionDialogProfiles" :key="profile.id" :value="profile.id">{{ profileOptionLabel(profile) }}</option></select><div v-if="subscriptionDialogSelectedProfile" class="subscription-profile-summary"><div><span>Profile</span><b>{{ subscriptionDialogSelectedProfile.nickname || subscriptionDialogSelectedProfile.profileName || subscriptionDialogSelectedProfile.provider || '-' }}</b></div><div><span>运营商</span><b>{{ subscriptionDialogSelectedProfile.provider || '-' }}</b></div><div><span>ICCID</span><b class="mono">{{ subscriptionDialogSelectedProfile.iccid }}</b></div><div><span>当前号码</span><b class="mono">{{ subscriptionDialogSelectedProfile.state === 'enabled' ? subscriptionDialogDevice?.phoneNumber || '-' : '非当前启用 Profile' }}</b></div></div><label>策略类型</label><select v-model="esimSubscriptionForm.type" class="field"><option value="recharge">充值提醒</option><option value="sms_keepalive">短信保活</option></select><label>开始时间</label><input v-model="esimSubscriptionForm.startAt" class="field" type="datetime-local" required><label>执行间隔（天）</label><input v-model.number="esimSubscriptionForm.intervalDays" class="field" type="number" min="1"><template v-if="esimSubscriptionForm.type === 'recharge'"><label>充值金额/套餐</label><input v-model="esimSubscriptionForm.rechargeAmount" class="field" placeholder="20 CNY"></template><template v-else><label>保活短信号码</label><input v-model="esimSubscriptionForm.keepaliveNumber" class="field" placeholder="10086" required><label>保活短信内容</label><input v-model="esimSubscriptionForm.keepaliveMessage" class="field" placeholder="CXLL" required></template><label>消息提醒 Target</label><select v-model="esimSubscriptionForm.targetIds" class="field" multiple required><option v-for="target in channels.filter((item) => item.enabled)" :key="target.id" :value="target.id">{{ target.name }} / {{ target.serviceName }} / {{ target.configKey }}</option></select><small v-if="channels.filter((item) => item.enabled).length === 0" class="muted">请先在消息分发中配置并启用 Apprise Target。</small><label>备注</label><textarea v-model="esimSubscriptionForm.note" placeholder="用途、套餐说明、注意事项"></textarea><label class="checkbox-row"><input v-model="esimSubscriptionForm.enabled" type="checkbox"> 启用策略</label><div class="subscription-dialog-actions"><button v-if="editingEsimSubscriptionId" class="btn danger" type="button" :disabled="deletingEsimSubscriptionId === editingEsimSubscriptionId" @click="selectedSubscriptionConfig && deleteEsimSubscription(selectedSubscriptionConfig)">删除策略</button><span></span><button class="btn" type="button" @click="showEsimSubscriptionDialog = false">取消</button><button class="btn primary" :disabled="!esimSubscriptionForm.profileId || esimSubscriptionForm.targetIds.length === 0">{{ editingEsimSubscriptionId ? '保存修改' : '保存订阅策略' }}</button></div></form></div>
+          <div v-if="showEsimSubscriptionDialog" class="modal-backdrop"><form class="card form modal" @submit.prevent="saveEsimSubscription"><div class="card-head"><b>{{ editingEsimSubscriptionId ? '编辑订阅策略' : '新增订阅策略' }}</b><button class="btn small" type="button" @click="showEsimSubscriptionDialog = false">关闭</button></div><label>终端</label><select class="field" :value="subscriptionDialogDeviceId" :disabled="!!editingEsimSubscriptionId" @change="selectSubscriptionDialogDevice(($event.target as HTMLSelectElement).value)" required><option v-for="device in devices" :key="device.id" :value="device.id">{{ device.name }} / {{ device.eid }} / {{ device.status }}</option></select><label>号码 / Profile</label><select v-model="esimSubscriptionForm.profileId" class="field" :disabled="!!editingEsimSubscriptionId" required><option v-for="profile in editingEsimSubscriptionId ? subscriptionDialogProfiles : availableSubscriptionDialogProfiles" :key="profile.id" :value="profile.id">{{ profileOptionLabel(profile) }}</option></select><div v-if="subscriptionDialogSelectedProfile" class="subscription-profile-summary"><div><span>Profile</span><b>{{ subscriptionDialogSelectedProfile.nickname || subscriptionDialogSelectedProfile.profileName || subscriptionDialogSelectedProfile.provider || '-' }}</b></div><div><span>运营商</span><b>{{ subscriptionDialogSelectedProfile.provider || '-' }}</b></div><div><span>ICCID</span><b class="mono">{{ subscriptionDialogSelectedProfile.iccid }}</b></div><div><span>当前号码</span><b class="mono">{{ subscriptionDialogSelectedProfile.state === 'enabled' ? subscriptionDialogDevice?.phoneNumber || '-' : '非当前启用 Profile' }}</b></div></div><label>策略类型</label><select v-model="esimSubscriptionForm.type" class="field"><option value="recharge">充值提醒</option><option value="sms_keepalive">短信保活</option></select><label>开始时间</label><input v-model="esimSubscriptionForm.startAt" class="field" type="datetime-local" required><label>执行间隔（天）</label><input v-model.number="esimSubscriptionForm.intervalDays" class="field" type="number" min="1"><template v-if="esimSubscriptionForm.type === 'recharge'"><label>充值金额/套餐</label><input v-model="esimSubscriptionForm.rechargeAmount" class="field" placeholder="20 CNY"></template><template v-else><label>保活短信号码</label><input v-model="esimSubscriptionForm.keepaliveNumber" class="field" placeholder="10086" required><label>保活短信内容</label><input v-model="esimSubscriptionForm.keepaliveMessage" class="field" placeholder="CXLL" required></template><label>消息提醒 Target</label><select v-model="esimSubscriptionForm.targetIds" class="field" multiple required><option v-for="target in channels.filter((item) => item.enabled)" :key="target.id" :value="target.id">{{ target.name }} / {{ target.serviceName }} / {{ isOpenILinkService(target.serviceId) ? (target.recipient || '默认接收人') : target.configKey }}</option></select><small v-if="channels.filter((item) => item.enabled).length === 0" class="muted">请先在消息分发中配置并启用通知 Target。</small><label>备注</label><textarea v-model="esimSubscriptionForm.note" placeholder="用途、套餐说明、注意事项"></textarea><label class="checkbox-row"><input v-model="esimSubscriptionForm.enabled" type="checkbox"> 启用策略</label><div class="subscription-dialog-actions"><button v-if="editingEsimSubscriptionId" class="btn danger" type="button" :disabled="deletingEsimSubscriptionId === editingEsimSubscriptionId" @click="selectedSubscriptionConfig && deleteEsimSubscription(selectedSubscriptionConfig)">删除策略</button><span></span><button class="btn" type="button" @click="showEsimSubscriptionDialog = false">取消</button><button class="btn primary" :disabled="!esimSubscriptionForm.profileId || esimSubscriptionForm.targetIds.length === 0">{{ editingEsimSubscriptionId ? '保存修改' : '保存订阅策略' }}</button></div></form></div>
         </section>
 
         <ToolsPage v-if="!loading && page === 'tools'" v-model:device-id="toolDeviceId" v-model:at-command="toolATCommand" v-model:active-command-id="activeToolCommandId" :devices="devices" :commands="commands" :result="toolResult" @run-command="runDiagnosticCommand" @refresh="loadAll" />
