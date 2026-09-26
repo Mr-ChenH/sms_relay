@@ -180,6 +180,9 @@ func (s *Server) authorizeOpenILinkWebhook(r *http.Request, body []byte, install
 }
 
 func (s *Server) executeOpenILinkCommand(service model.AppriseService, command openILinkCommand, sourceEventID string) string {
+	if command.Command == "help" {
+		return openILinkHelp(service.OpenILinkCapabilities, command)
+	}
 	if !containsExact(service.OpenILinkCapabilities, command.Command) {
 		return fmt.Sprintf("SMS Hub 未启用功能 %s。", command.Command)
 	}
@@ -286,7 +289,9 @@ func (s *Server) executeOpenILinkCommand(service model.AppriseService, command o
 }
 
 func openILinkTools(capabilities []string) []notify.OpenILinkTool {
-	tools := make([]notify.OpenILinkTool, 0, len(capabilities))
+	tools := make([]notify.OpenILinkTool, 0, len(capabilities)+1)
+	help, _ := openILinkToolDefinition("help")
+	tools = append(tools, help)
 	for _, capability := range capabilities {
 		tool, ok := openILinkToolDefinition(capability)
 		if ok {
@@ -311,6 +316,7 @@ func openILinkToolDefinition(name string) (notify.OpenILinkTool, bool) {
 		return map[string]interface{}{"type": "integer", "description": description}
 	}
 	definitions := map[string]notify.OpenILinkTool{
+		"help":                  {Name: "help", Command: "help", Description: "列出 SMS Hub 可用命令，或查看指定命令的参数和用法", Parameters: object(map[string]interface{}{"command": stringProperty("可选，要查看的命令名称")})},
 		"get_overview":          {Name: "get_overview", Command: "get_overview", Description: "查看 SMS Hub 总览、终端在线数量、短信和任务状态", Parameters: object(map[string]interface{}{})},
 		"list_devices":          {Name: "list_devices", Command: "list_devices", Description: "列出短信终端及在线、号码、运营商和信号状态", Parameters: object(map[string]interface{}{})},
 		"search_sms":            {Name: "search_sms", Command: "search_sms", Description: "检索历史短信", Parameters: object(map[string]interface{}{"query": stringProperty("短信内容、发送方、接收方或消息 ID；可为空"), "page": integerProperty("页码"), "pageSize": integerProperty("每页数量，最多 20")})},
@@ -322,6 +328,49 @@ func openILinkToolDefinition(name string) (notify.OpenILinkTool, bool) {
 	}
 	tool, ok := definitions[name]
 	return tool, ok
+}
+
+func openILinkHelp(capabilities []string, command openILinkCommand) string {
+	requested := strings.ToLower(strings.TrimPrefix(firstOpenILinkArg(command, "command", 0), "/"))
+	if requested != "" {
+		if requested != "help" && !containsExact(capabilities, requested) {
+			return fmt.Sprintf("命令 /%s 未启用或不存在。使用 /help 查看可用命令。", requested)
+		}
+		tool, ok := openILinkToolDefinition(requested)
+		if !ok {
+			return fmt.Sprintf("命令 /%s 不存在。使用 /help 查看可用命令。", requested)
+		}
+		return fmt.Sprintf("/%s\n%s\n用法：%s", tool.Command, tool.Description, openILinkCommandUsage(requested))
+	}
+
+	var reply strings.Builder
+	reply.WriteString("SMS Hub 可用命令：\n")
+	help, _ := openILinkToolDefinition("help")
+	fmt.Fprintf(&reply, "/help [command] - %s\n", help.Description)
+	for _, capability := range capabilities {
+		tool, ok := openILinkToolDefinition(capability)
+		if !ok {
+			continue
+		}
+		fmt.Fprintf(&reply, "/%s - %s\n", tool.Command, tool.Description)
+	}
+	reply.WriteString("\n使用 /help <command> 查看具体参数。")
+	return reply.String()
+}
+
+func openILinkCommandUsage(name string) string {
+	usages := map[string]string{
+		"help":                  "/help [command]",
+		"get_overview":          "/get_overview",
+		"list_devices":          "/list_devices",
+		"search_sms":            "/search_sms [query]",
+		"list_esim_profiles":    "/list_esim_profiles <deviceId>",
+		"get_command_status":    "/get_command_status <commandId>",
+		"send_sms":              "/send_sms <deviceId> <phone> <message>",
+		"refresh_device_status": "/refresh_device_status <deviceId>",
+		"switch_esim_profile":   "/switch_esim_profile <deviceId> <iccid>",
+	}
+	return usages[name]
 }
 
 func firstOpenILinkArg(command openILinkCommand, name string, textIndex int) string {

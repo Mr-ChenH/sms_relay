@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -99,6 +100,53 @@ func TestOpenILinkWebhookHonorsCapabilitySelection(t *testing.T) {
 	}
 	if !bytes.Contains(response.Body.Bytes(), []byte("未启用功能")) {
 		t.Fatalf("body = %s", response.Body.String())
+	}
+}
+
+func TestOpenILinkWebhookHelpListsOnlyEnabledCommands(t *testing.T) {
+	_, handler := newOpenILinkWebhookTestServer(t, []string{"get_overview", "list_devices"})
+	body := openILinkCommandBody(t, "evt-help", "inst-allowed", "help", nil)
+	request := signedOpenILinkRequest(t, body, "inst-allowed", "webhook-secret", time.Now())
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
+	}
+	var result map[string]string
+	if err := json.Unmarshal(response.Body.Bytes(), &result); err != nil {
+		t.Fatal(err)
+	}
+	for _, wanted := range []string{"/help", "/get_overview", "/list_devices"} {
+		if !strings.Contains(result["reply"], wanted) {
+			t.Fatalf("help reply missing %q: %s", wanted, result["reply"])
+		}
+	}
+	if strings.Contains(result["reply"], "/send_sms") {
+		t.Fatalf("help reply exposes disabled command: %s", result["reply"])
+	}
+}
+
+func TestOpenILinkWebhookHelpDescribesCommand(t *testing.T) {
+	_, handler := newOpenILinkWebhookTestServer(t, []string{"send_sms"})
+	body := openILinkCommandBody(t, "evt-help-send", "inst-allowed", "help", map[string]interface{}{"command": "send_sms"})
+	request := signedOpenILinkRequest(t, body, "inst-allowed", "webhook-secret", time.Now())
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+
+	var result map[string]string
+	if err := json.Unmarshal(response.Body.Bytes(), &result); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(result["reply"], "/send_sms <deviceId> <phone> <message>") || !strings.Contains(result["reply"], "运营商费用") {
+		t.Fatalf("reply = %s", result["reply"])
+	}
+}
+
+func TestOpenILinkToolsAlwaysIncludeHelp(t *testing.T) {
+	tools := openILinkTools([]string{"list_devices"})
+	if len(tools) != 2 || tools[0].Name != "help" || tools[1].Name != "list_devices" {
+		t.Fatalf("tools = %#v", tools)
 	}
 }
 

@@ -120,6 +120,7 @@ SMS Hub supports both directions without a separate Apprise deployment:
 
 | Tool / Slash command | Behavior | Risk |
 | --- | --- | --- |
+| `help` | List enabled commands, or show usage for one command with `/help <command>` | Read only, always enabled |
 | `get_overview` | Dashboard totals, recent SMS, failures, and running tasks | Read only |
 | `list_devices` | Terminal connectivity, SIM/eSIM, carrier, signal, and last seen | Read only |
 | `search_sms` | Search stored SMS messages, up to 20 results per call | Read only |
@@ -129,7 +130,7 @@ SMS Hub supports both directions without a separate Apprise deployment:
 | `refresh_device_status` | Queue a terminal status refresh | Write |
 | `switch_esim_profile` | Enable another eSIM Profile and interrupt cellular connectivity | High-risk write |
 
-Each tool is independently selectable in the notification service. Disabled tools are rejected even if an old Tool definition remains in OpeniLink Hub.
+Every operational tool is independently selectable in the notification service; `help` is always available and only describes tools enabled for that service. Disabled tools are rejected even if an old Tool definition remains in OpeniLink Hub.
 
 ### Setup
 
@@ -139,7 +140,7 @@ Each tool is independently selectable in the notification service. Disabled tool
 4. In SMS Hub -> **消息分发**, create or edit an **OpeniLink Hub** service. Enter the Hub origin such as `http://openilink-hub:9800`, enable reverse control, enter the Webhook Secret, allow the Installation ID, and select the exposed tools.
 5. Add an OpeniLink Target under that service using the installation App Token. The recipient can be omitted when the OpeniLink installation has a default recipient.
 6. Click **同步 Tools** on the Target, then verify the App Webhook URL in OpeniLink Hub. The commands and AI Tool schemas are now registered for that installation.
-7. Test `/list_devices` in WeChat before enabling write tools such as `/send_sms` or `/switch_esim_profile`.
+7. Test `/help` and `/list_devices` in WeChat before enabling write tools such as `/send_sms` or `/switch_esim_profile`. Use `/help send_sms` to see command-specific parameters.
 
 OpeniLink webhook requests are accepted only when their HMAC-SHA256 signature is valid, the timestamp is within five minutes, and the Installation ID is in the service allowlist. Event results are cached for 24 hours so OpeniLink retries do not create duplicate SMS or eSIM commands.
 
